@@ -7,7 +7,7 @@ import urllib.request
 import os, signal
 import subprocess
 from selenium import webdriver
-from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 # Measure runtime of the script
 startTime = time.time()
@@ -38,14 +38,13 @@ if folder is None:
 # It's easier to work with the whole path.
 URLPath = domain + folder
 
-# Initialize headless Firefox browser we'll need to get cumbersome JS generated pages like KKD reference (this can be pretty slow BTW)
-options = Options()
-options.headless = True
-
+# Initialize headless Firefox browser we'll need to get cumbersome JS-generated pages like KL reference (this can be pretty slow BTW)
+opts = FirefoxOptions()
+opts.add_argument("--headless")
 
 # The executable_path isn't mandatory if geckodriver is in PATH
-# browser = webdriver.Firefox(options=options, executable_path='/usr/bin/geckodriver')
-browser = webdriver.Firefox(options=options)
+# browser = webdriver.Firefox(options=opts, executable_path='/usr/bin/geckodriver')
+browser = webdriver.Firefox(options=opts)
 
 # Define colors (if the OS we're on is Windows, drop that and just fill them with empty strings because colors in command prompt on Windows are too much pain)
 if sys.platform != 'win32':
@@ -80,13 +79,27 @@ def printNOK(pg, ln, first, type=None, redir=""):
 
 	# Decide whether to print the headline (which page has issues). The logic behind this is:
 	# We print the headline only if it's the 1st error for the page. But if the --quiet switch is on and the issue is only warning (3 types - absorel, unreachable, and cantGoOutside), then we mustn't print the headline because it'd be only headline and no issue beneath it (we don't print warnings when we're told to be quiet).
-	# BTW - removed exitCode = 1 from the warnings so they cause the script to end with failure (because they're not essentially a failure).
-	if first == True and not (beQuiet == True and (type == 'absorel' or type == 'unreachable' or type == 'cantGoOutside' or type == 'GHLineHilight' or type == 'externalNOK')):
+	# BTW - removed exitCode = 1 from the warnings so they don't cause the script to end with failure (because they're not essentially a failure).
+	if first == True  \
+		and not (beQuiet == True  \
+ 				  and (   type == 'absorel'  \
+ 				       or type == 'unreachable'  \
+ 				       or type == 'cantGoOutside'  \
+ 				       or type == 'GHLineHilight'  \
+ 				       or type == 'externalNOK')  \
+ 				  or type == 'sitemapNotFound' \
+ 				):
 		print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
 
 	# outside page thru 404
 	if type == '404':
 		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Outsite link unreachable: " + color.END + ln)
+		internalExitCode = 1
+		first = False
+
+	# Remote sitemap not found
+	elif type == 'sitemapNotFound':
+		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Remote sitemap not found under this URL: " + color.END + ln)
 		internalExitCode = 1
 		first = False
 
@@ -148,7 +161,11 @@ if beVerbose:
 
 # Get the whole live sitemap, read the HTTP object and convert it to string. Requires import urllib.request
 print("Getting the remote sitemap. Assuming it's at " + domain + folder + "/sitemap.xml\n") # (As it should according to https://www.sitemaps.org/protocol.html#location)")
-sitemap = str(urllib.request.urlopen(domain + folder + "/sitemap.xml").read())
+try:
+	sitemap = str(urllib.request.urlopen(domain + folder + "/sitemap.xml").read())
+except:
+	printNOK("", domain + folder + "/sitemap.xml", True, "sitemapNotFound")
+	sys.exit(exitCode)
 
 if beVerbose:
 	debugTime = printDebugTime("Getting the sitemap took", debugTime, startTime)
@@ -194,7 +211,7 @@ for URL in URLs:
 	# Cleaning up some mess
 	# Delete anchor links that are term definitions (start with "#term-definition-term_"). They're causing false positives since there's no heading with such ID (https://kentico.atlassian.net/browse/CTC-1009)
 	# Also delete all links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target page)
-	# Also #2 delete the "#main" and "#subscribe-breaking-changes-email" anchor links because they're just internal bullshitery in KKD
+	# Also #2 delete the "#main" and "#subscribe-breaking-changes-email" anchor links because they're just internal bullshitery in KL
 	# Also #3 delete all GitHub links as GH apparently uses JS instead of the standard HTML way to navigate to the correct place
 	# We can safely do this in one loop because the loop contains only one condition block and the i var will never get incremented unless nothing gets deleted.
 	i = 0
@@ -222,7 +239,7 @@ for URL in URLs:
 		if len(anchorLinks[i]) > 2048:
 			del anchorLinks[i]
 
-		# This just to warn user that they have relative link that's not implemented as relative (starts with the domain instead of just slash). This use case is probably fairly specific just to KKD.
+		# This just to warn user that they have relative link that's not implemented as relative (starts with the domain instead of just slash). This use case is probably fairly specific just to KL.
 		if re.match(domain, anchorLinks[i]):
 			wasAbsorel[URL] = anchorLinks[i]
 			absorel += 1
