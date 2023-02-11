@@ -1,11 +1,12 @@
 import argparse
+import os, signal
 import re
 import requests
+import subprocess
 import sys
 import time
+import traceback
 import urllib.request
-import os, signal
-import subprocess
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
@@ -20,14 +21,16 @@ firstError = True
 
 # Set up named arguments
 parser=argparse.ArgumentParser()
-parser.add_argument('-d', '--domain', help='Base URL of your portal, e.g. https://docs.kontent.ai', required=True)
+parser.add_argument('-d', '--domain', help='Base URL of your portal, including the protocol; e.g. https://docs.kontent.ai', required=True)
 parser.add_argument('-f', '--folder', help='Folder (subportal) on your website, e.g. tutorials', required=False, default="")
 parser.add_argument('-x', '--no-external', help="Do not check external pages (ie. pages outside the domain)", required=False, action='store_true')
+parser.add_argument('-s', '--sitemap', help='Specify full sitemap URL manually', required=False, default="")
 parser.add_argument('-q', '--quiet', help='Do not print warnings, only info and errors.', required=False, action='store_true')
 parser.add_argument('-v', '--verbose', help='Be very verbose and print time spent on each (larger) operation', required=False, action='store_true')
 args=parser.parse_args()
 domain = args.domain
 folder = args.folder
+manualSitemapLoc = args.sitemap
 noExternal = args.no_external
 beQuiet = args.quiet
 beVerbose = args.verbose
@@ -151,8 +154,14 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 
 	# External broken anchor, we're treating it as a warning only
 	elif type == "normalLinkUnreachable":
+		internalExitCode = 1
+		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Link unreachable (with HTTP code " + str(errorCode) + "): " + color.END + ln)
+		first = False
+
+	# External broken anchor, we're treating it as a warning only
+	elif type == "normalLinkTimeout":
 		if beQuiet == False:
-			print(color.RED + color.BOLD + "##vso[task.logissue type=error] Link unreachable (with HTTP code " + str(errorCode) + "): " + color.END + ln)
+			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] Link timed out, manual check advised: " + color.END + ln)
 			first = False
 
 	# we can positively say the ID (anchor) isn't in the target page
@@ -164,6 +173,38 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 	exitCode = internalExitCode
 	return first
 
+# Set up some counters first so we can print stats when done.
+okInternal = 0
+okInPage = 0
+nokInternal = 0
+nokInPage = 0
+missed = 0
+notInSitemap = 0
+okAnchorOutside = 0
+nokAnchorOutside = 0
+okNormalLinks = 0
+unreachable = 0
+pagesChecked = 0
+retrieved = 0
+absorel = 0
+checkedLinks = {}
+
+def printStats():
+	print(color.BOLD + "\n===== STATS ===== " + color.END + \
+	      " \nTotal pages checked: " + str(pagesChecked) + \
+	      "\nAnchor links: " + \
+	      "\n\tOK - in-page: " + str(okInPage) + \
+	      "\n\tOK - internal: " + str(okInternal) + \
+	      "\n\tNOK - in-page: " + str(nokInPage) + \
+	      "\n\tNOK - internal: " + str(nokInternal) + \
+	      "\n\tOK outside portal: " + str(okAnchorOutside) + \
+	      "\n\tNOK outside portal: " + str(nokAnchorOutside) + \
+	      "\nOK - normal links: " + str(okNormalLinks) + " (" + str(len(checkedLinks)) + " unique)" \
+	      "\nUnreachable links: " + str(unreachable) + \
+	      "\nAbsolute URLs within Domain: " + str(absorel) + \
+	      "\nPages not in sitemap: " + str(notInSitemap) + \
+	      "\n\nScript execution time: " + str(round(time.time() - startTime)) + " sec.")
+
 def printDebugTime(message, blockStartTime, scriptStartTime):
 	print(message + " " + str(round(time.time() - blockStartTime)) + " sec. (" + str(round(time.time() - scriptStartTime)) + " since start)")
 	return time.time()
@@ -174,322 +215,347 @@ def printDebugTime(message, blockStartTime, scriptStartTime):
 if beVerbose:
 	debugTime = printDebugTime("Initialization took", startTime, startTime)
 
-# Get the whole live sitemap, read the HTTP object and convert it to string. Requires import urllib.request
-print("Getting the remote sitemap. Assuming it's at " + domain + folder + "/sitemap.xml\n") # (As it should according to https://www.sitemaps.org/protocol.html#location)")
 try:
-	# sitemap = str(urllib.request.urlopen("https://kcd-web-preview-master.azurewebsites.net/learn/sitemap.xml").read())
-	# sitemap = str(urllib.request.urlopen("https://kontent.ai/learn/sitemap.xml").read())
-	sitemap = str(urllib.request.urlopen(domain + folder + "/sitemap.xml").read())
-except:
-	firstError = printNOK("", domain + folder + "/sitemap.xml", True, "sitemapNotFound")
-	sys.exit(exitCode)
 
-if beVerbose:
-	debugTime = printDebugTime("Getting the sitemap took", debugTime, startTime)
+	# Get the whole live sitemap, read the HTTP object and convert it to string. Requires import urllib.request
+	# Tips for KL sitemap locations:
+		# Preview: https://kcd-web-preview-master.azurewebsites.net/learn/sitemap.xml
+		# Live: https://kontent.ai/learn/sitemap.xml
+	if manualSitemapLoc:
+		print("Getting the remote sitemap from manually selected location: " + manualSitemapLoc)
+		try:
+			sitemap = str(urllib.request.urlopen(manualSitemapLoc).read())
+		except:
+			firstError = printNOK("", manualSitemapLoc, True, "sitemapNotFound")
+			sys.exit(exitCode)
+	else:
+		print("Getting the remote sitemap. Assuming it's at " + domain + folder + "/sitemap.xml\n") # (As it should according to https://www.sitemaps.org/protocol.html#location)")
+		try:
+			sitemap = str(urllib.request.urlopen(domain + folder + "/sitemap.xml").read())
+		except:
+			firstError = printNOK("", domain + folder + "/sitemap.xml", True, "sitemapNotFound")
+			sys.exit(exitCode)
 
-# Find all URLs with the URLPath in the sitemap file. "rf" in findall means r=regex, f=allow variables in the string searched for. Regexes require import re.
-URLs = re.findall(rf'({URLPath}.*?)</loc>', sitemap)
+	if beVerbose:
+		debugTime = printDebugTime("Getting the sitemap took", debugTime, startTime)
 
-if beVerbose:
-	debugTime = printDebugTime("Parsing the URLs in the sitemap took", debugTime, startTime)
+	# Find all URLs with the URLPath in the sitemap file. "rf" in findall means r=regex, f=allow variables in the string searched for. Regexes require import re.
+	URLs = re.findall(rf'({URLPath}.*?)</loc>', sitemap)
 
-# Prepare dictionary where key will be a page title and value an array with links containing a hash character (ie. a link with an anchor)
-pagesLinksAndAnchors = {}
+	if beVerbose:
+		debugTime = printDebugTime("Parsing the URLs in the sitemap took", debugTime, startTime)
 
-checkedLinks = {}
+	# Prepare dictionary where key will be a page title and value an array with links containing a hash character (ie. a link with an anchor)
+	pagesLinksAndAnchors = {}
 
-# Go thru the URLs obtained from the sitemap and get anchor links and IDs so we can check them later.
-# Set up counter of retrieved pages so we can report progress to a user.
-retrieved = 0
-absorel = 0
-wasAbsorel = {}
-total = len(URLs)
-for URL in URLs:
-	retrieved += 1
-	# get the page source
-	try:
-		# page = str(urllib.request.urlopen(URL).read())
-		browser.get(URL)
-		# Wait 6 seconds until atrocities like Management API v2 process all the JS
-		if "reference" in URL:
-			time.sleep(6)
-		page = browser.page_source
-	except:
-		firstError = printNOK("", URL, firstError, "internalSitemap404")
+	# Go thru the URLs obtained from the sitemap and get anchor links and IDs so we can check them later.
+	# Set up counter of retrieved pages so we can report progress to a user.
+	wasAbsorel = {}
+	total = len(URLs)
+	for URL in URLs:
+		retrieved += 1
+		# get the page source
+		try:
+			# page = str(urllib.request.urlopen(URL).read())
+			browser.get(URL)
+			# Wait 6 seconds until atrocities like Management API v2 process all the JS
+			if "reference" in URL:
+				time.sleep(6)
+			page = browser.page_source
+		except:
+			firstError = printNOK("", URL, firstError, "internalSitemap404")
 
-	# get the page's <title>
-	title = re.search(rf'<title>(.*?)</title>',page).group(1)
+		# get the page's <title>
+		title = re.search(rf'<title>(.*?)</title>',page).group(1)
 
-	# Each page will have its own nested dictionary with 'URL' as primary key and title' and 'anchorLinks' as nested keys
-	pagesLinksAndAnchors[URL] = {}
-	pagesLinksAndAnchors[URL]['title'] = title
+		# Each page will have its own nested dictionary with 'URL' as primary key and title' and 'anchorLinks' as nested keys
+		pagesLinksAndAnchors[URL] = {}
+		pagesLinksAndAnchors[URL]['title'] = title
 
-	# Get links with anchors (hash followed by at least one character except for a closing quote) in the page and save them to the pagesLinksAndAnchors dict
-	anchorLinks = re.findall(rf'href="([^"]*?#[^\"]+?)"',page)
+		# Get links with anchors (hash followed by at least one character except for a closing quote) in the page and save them to the pagesLinksAndAnchors dict
+		anchorLinks = re.findall(rf'href="([^"]*?#[^\"]+?)"',page)
 
-	# Get non-anchor links (opening quotes followed by at least one character and the link doesn't contain a hash) in the page and safe them to the pagesLinksAndAnchors dict
-	normalLinks = re.findall(rf'<a .*?href="([^"#]+?)"',page)
+		# Get non-anchor links (opening quotes followed by at least one character and the link doesn't contain a hash) in the page and safe them to the pagesLinksAndAnchors dict
+		normalLinks = re.findall(rf'<a .*?href="([^"#]+?)"',page)
 
-	# Assign the normal links to the main DB of pages w/ links inside them
-	pagesLinksAndAnchors[URL]['normal-links'] = normalLinks
+		# Assign the normal links to the main DB of pages w/ links inside them
+		pagesLinksAndAnchors[URL]['normal-links'] = normalLinks
 
-	# Cleaning up some anchor mess
-	# Delete anchor links that are term definitions (start with "#term-definition-term_"). They're causing false positives since there's no heading with such ID (https://kentico.atlassian.net/browse/CTC-1009)
-	# Also delete all links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target page)
-	# Also #2 delete the "#main" and "#subscribe-breaking-changes-email" anchor links because they're just internal bullshitery in KL
-	# Also #3 delete all GitHub links as GH apparently uses JS instead of the standard HTML way to navigate to the correct place
-	# We can safely do this in one loop because the loop contains only one condition block and the i var will never get incremented unless nothing gets deleted.
-	i = 0
-	while i < len(anchorLinks):
-		if re.match("#term-definition-term_", anchorLinks[i]):
-			# delete the invalid anchor link; mutates the existing array
-			del anchorLinks[i]
-		elif re.match("https://app.diagrams.net", anchorLinks[i]):
-			del anchorLinks[i]
-		elif re.match("https://viewer.diagrams.net", anchorLinks[i]):
-			del anchorLinks[i]
-		elif re.match("https://github.com", anchorLinks[i]):
-			del anchorLinks[i]
-		elif re.match("#main", anchorLinks[i]):
-			del anchorLinks[i]
-		elif re.match("#subscribe-breaking-changes-email", anchorLinks[i]):
-			del anchorLinks[i]
-		else:
+		# Cleaning up some anchor mess
+		# Delete anchor links that are term definitions (start with "#term-definition-term_"). They're causing false positives since there's no heading with such ID (https://kentico.atlassian.net/browse/CTC-1009)
+		# Also delete all links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target page)
+		# Also #2 delete the "#main" and "#subscribe-breaking-changes-email" anchor links because they're just internal bullshitery in KL
+		# Also #3 delete all GitHub links as GH apparently uses JS instead of the standard HTML way to navigate to the correct place
+		# We can safely do this in one loop because the loop contains only one condition block and the i var will never get incremented unless nothing gets deleted.
+		i = 0
+		while i < len(anchorLinks):
+			if re.match("#term-definition-term_", anchorLinks[i]):
+				# delete the invalid anchor link; mutates the existing array
+				del anchorLinks[i]
+			elif re.match("https://app.diagrams.net", anchorLinks[i]):
+				del anchorLinks[i]
+			elif re.match("https://viewer.diagrams.net", anchorLinks[i]):
+				del anchorLinks[i]
+			elif re.match("https://github.com", anchorLinks[i]):
+				del anchorLinks[i]
+			elif re.match("#main", anchorLinks[i]):
+				del anchorLinks[i]
+			elif re.match("#subscribe-breaking-changes-email", anchorLinks[i]):
+				del anchorLinks[i]
+			else:
+				i += 1
+
+		i = 0
+		while i < len(anchorLinks):
+
+			# If the link is longer than 2048 characters, it's quite probably some weirdness like links to diagram.net that have the whole diagram encoded into the URL, apparently. Delete such links, the hash character there doesn't stand for an anchor link anyway.
+			if len(anchorLinks[i]) > 2048:
+				del anchorLinks[i]
+
+			# This will be used to just warn user that they have relative link that's not implemented as relative (starts with the domain instead of just slash).
+			if re.match(domain, anchorLinks[i]):
+				wasAbsorel[URL] = anchorLinks[i]
+				absorel += 1
+
+			# Replace the relative URL prefix with full URL
+			# anchorLinks[i] = re.sub(rf'^{folder}', URLPath, anchorLinks[i])
+			anchorLinks[i] = re.sub(rf'^/', domain + '/', anchorLinks[i])
+
 			i += 1
 
-	i = 0
-	while i < len(anchorLinks):
+		# Assign cleaned anchor links to the main DB of pages w/ links inside them
+		pagesLinksAndAnchors[URL]['anchor-links'] = anchorLinks
 
-		# If the link is longer than 2048 characters, it's quite probably some weirdness like links to diagram.net that have the whole diagram encoded into the URL, apparently. Delete such links, the hash character there doesn't stand for an anchor link anyway.
-		if len(anchorLinks[i]) > 2048:
-			del anchorLinks[i]
+		# Get HTML ID attributes in the page
+		anchors = re.findall(rf'id="(.*?)"', page)
+		pagesLinksAndAnchors[URL]['anchors'] = anchors
 
-		# This will be used to just warn user that they have relative link that's not implemented as relative (starts with the domain instead of just slash).
-		if re.match(domain, anchorLinks[i]):
-			wasAbsorel[URL] = anchorLinks[i]
-			absorel += 1
+		# Progress reporting
+		percentProgress = str(round((retrieved/total)*100, 2))
 
-		# Replace the relative URL prefix with full URL
-		# anchorLinks[i] = re.sub(rf'^{folder}', URLPath, anchorLinks[i])
-		anchorLinks[i] = re.sub(rf'^/', domain + '/', anchorLinks[i])
+		# If the retrieving is done (on the last page, it's 100 % done so we don't want to overwrite the status line with a new updated one anymore). 1 = 100 %
+		if retrieved/total == 1:
+			end = "\n\n"
+		else:
+			end = "\r"
 
-		i += 1
+		# Commenting the progress reporting out because the it's messing up logs in Smoke Tests in Azure DevOps.
+		# print("Retrieved and processed pages obtained from the sitemap: " + str(retrieved) + "/" + str(total) + " (" + percentProgress + " %)", end=end)
 
-	# Assign cleaned anchor links to the main DB of pages w/ links inside them
-	pagesLinksAndAnchors[URL]['anchor-links'] = anchorLinks
+		if beVerbose:
+			debugTime = printDebugTime("Getting the " + URL + " took", debugTime, startTime)
 
-	# Get HTML ID attributes in the page
-	anchors = re.findall(rf'id="(.*?)"', page)
-	pagesLinksAndAnchors[URL]['anchors'] = anchors
+	if retrieved == 0:
+		firstError = printNOK(type="noSitemapMatch")
+		# print(color.RED + color.BOLD + "##vso[task.logissue type=warning]No page URL in the sitemap matches the URL path you've entered: " + URLPath + color.END)
+		exitCode = 1
 
-	# Progress reporting
-	percentProgress = str(round((retrieved/total)*100, 2))
+	# Now we go thru the anchor links we got and check whether the anchors exist.
 
-	# If the retrieving is done (on the last page, it's 100 % done so we don't want to overwrite the status line with a new updated one anymore). 1 = 100 %
-	if retrieved/total == 1:
-		end = "\n\n"
-	else:
-		end = "\r"
+	for page in pagesLinksAndAnchors:
+		# This is indicator whether we're printing the 1st error for the current page. If yes, then print the page title and URL. If not, don't print that, just print the error.
+		firstError = True
+		# print("\nProcessing page " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END)
+		for link in pagesLinksAndAnchors[page]["anchor-links"]:
 
-	# Commenting the progress reporting out because the it's messing up logs in Smoke Tests in Azure DevOps.
-	# print("Retrieved and processed pages obtained from the sitemap: " + str(retrieved) + "/" + str(total) + " (" + percentProgress + " %)", end=end)
+			# Inform user the link is absolute even though it's within the domain
+			try:
+				if link in wasAbsorel[page]:
+					firstError = printNOK(page, link, firstError, "absorel")
+			except:
+				pass
 
-	if beVerbose:
-		debugTime = printDebugTime("Getting the " + URL + " took", debugTime, startTime)
-
-if retrieved == 0:
-	firstError = printNOK(type="noSitemapMatch")
-	# print(color.RED + color.BOLD + "##vso[task.logissue type=warning]No page URL in the sitemap matches the URL path you've entered: " + URLPath + color.END)
-	exitCode = 1
-
-# Now we go thru the anchor links we got and check whether the anchors exist.
-# Set up some counters first so we can print stats when done.
-okInternal = 0
-okInPage = 0
-nokInternal = 0
-nokInPage = 0
-missed = 0
-notInSitemap = 0
-okOutside = 0
-nokOutside = 0
-unreachable = 0
-pagesChecked = 0
-
-for page in pagesLinksAndAnchors:
-	# This is indicator whether we're printing the 1st error for the current page. If yes, then print the page title and URL. If not, don't print that, just print the error.
-	firstError = True
-	# print("\nProcessing page " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END)
-	for link in pagesLinksAndAnchors[page]["anchor-links"]:
-
-		# Inform user the link is absolute even though it's within the domain
-		try:
-			if link in wasAbsorel[page]:
-				firstError = printNOK(page, link, firstError, "absorel")
-		except:
-			pass
-
-		# If the link is an in-page anchor link
-		if re.match(rf'#', link):
-			if link.replace("#", "") in pagesLinksAndAnchors[page]["anchors"]:
-				okInPage += 1
-			else:
-				firstError = printNOK(page, link, firstError)
-				nokInPage += 1
-
-		# If the link is anchor link to another page inside the portal
-		elif re.match(rf'{URLPath}', link):
-			linkBaseURL = re.search(fr'(.*?)#', link).group(1)
-			linkAnchor = re.search(fr'#(.*)', link).group(1)
-			if linkBaseURL in pagesLinksAndAnchors:
-				if linkAnchor in pagesLinksAndAnchors[linkBaseURL]['anchors']:
-					okInternal += 1
-
+			# If the link is an in-page anchor link
+			if re.match(rf'#', link):
+				if link.replace("#", "") in pagesLinksAndAnchors[page]["anchors"]:
+					okInPage += 1
 				else:
 					firstError = printNOK(page, link, firstError)
-					nokInternal += 1
-			else:
-				# See if it isn't just a redirect - requests.get() gets history with return HTTP codes, .url contains the final landing URL. Requires import requests
-				# redirection = ""
-				# print("baseURL: " + linkBaseURL)
-				finalURL = requests.get(linkBaseURL).url
-				# print("finalURL: " + finalURL)
-				# print("link: " + link)
+					nokInPage += 1
 
-				# removed printing of the redirection info bcs it's redundant
-				# if finalURL != linkBaseURL:
-					# redirection = " ===> " + finalURL
-
-				# Repeating the checking code here but I'm too lazy now;; See if the final URL is in the URLs we have already.
-				if finalURL in pagesLinksAndAnchors:
-					if linkAnchor in pagesLinksAndAnchors[finalURL]['anchors']:
+			# If the link is anchor link to another page inside the portal
+			elif re.match(rf'{URLPath}', link):
+				linkBaseURL = re.search(fr'(.*?)#', link).group(1)
+				linkAnchor = re.search(fr'#(.*)', link).group(1)
+				if linkBaseURL in pagesLinksAndAnchors:
+					if linkAnchor in pagesLinksAndAnchors[linkBaseURL]['anchors']:
 						okInternal += 1
+
 					else:
-						# printNOK(page, link, firstError, None, redirection)
-						firstError = printNOK(page, link, firstError, None, finalURL)
+						firstError = printNOK(page, link, firstError)
 						nokInternal += 1
-				# This is a legacy branch and it should never occur. If it does, it means that the page is in our (sub)portal (domain + folder) but it wasn't in the sitemap. Leaving this here because it might prove to be a good way to check for incomplete sitemap. Should this be unwanted, then this branch needs to redirect to the branch which gets outside page to check it.
 				else:
-					# printNOK(page, link, firstError, "unreachable", redirection)
-					firstError = printNOK(page, link, firstError, "unreachable", finalURL)
-					notInSitemap += 1
+					# See if it isn't just a redirect - requests.get() gets history with return HTTP codes, .url contains the final landing URL. Requires import requests
+					# redirection = ""
+					# print("baseURL: " + linkBaseURL)
+					finalURL = requests.get(linkBaseURL).url
+					# print("finalURL: " + finalURL)
+					# print("link: " + link)
 
-		# The link leads outside the (sub)portal, let's download them and see if the anchor exists in the target page (but only if user didn't prohibit this by the -x switch)
-		else:
-			if noExternal == False:
-				# The try/except structure is here to test whether the page exists (the potential 404 kills the whole script by Python throwing an exception).
-				try:
-					# if the link seems to be relative (doesn't start with 'http' but with '/' so it leads to the domain but not to the domain+folder path), so let's add the domain to it.
-					if re.match(r'^/', link):
-						link = domain + link
+					# removed printing of the redirection info bcs it's redundant
+					# if finalURL != linkBaseURL:
+						# redirection = " ===> " + finalURL
 
-					# Build the request for the outside page. Since some sites apparently don't like the Python3's URLlib user agent (e.g. diagrams.net), we need to set it to something they'll like (hence the headers={...} part.
-					# req = urllib.request.Request(link, headers={'User-Agent': 'Mozilla/5.0'})
-
-					# Get the outside page
-					# outsidePage = str(urllib.request.urlopen(req).read())
-					browser.get(link)
-					# time.sleep(4)
-					outsidePage = browser.page_source
-
-					# Get base URL and anchor from the link
-					outsideLinkBaseURL = re.search(r'(.*?)#', link).group(1)
-					outsideLinkAnchor = re.search(r'#(.*)', link).group(1)
-					
-					# First try the normal anchor system - anchors go to IDs in the page
-					if re.search(rf'id="{outsideLinkAnchor}"', outsidePage):
-						okOutside += 1
-
-					# If that fails, it can also be GitHub's bullshitery - they don't give <hX> tags IDs but put an <a class="anchor" href="#anchor"...> links inside them with the href="#anchor" in lowercase (hence the , re.IGNORECASE) and use JavaScript to scroll down to the link. So let's search for that before we give up entirely and say the anchor is bad. This is fragile, BTW - if they change the structure of the link, this test will fail.
-					elif re.search(rf'class="anchor".*?href="#{outsideLinkAnchor}', outsidePage, re.IGNORECASE):
-						okOutside += 1
-
-					elif re.search(rf'#L\d+(-L\d+)?', link):
-						# We split the potential lines range to two items bcs the whole anchor isn't in the page source - we need to search for bounderies of the highlight (e.g. #L80-L86 will be both IDs to check)
-						hilightRange = outsideLinkAnchor.split("-")
-						line = 0
-						while line < len(hilightRange):
-							if re.search(rf'id="{hilightRange[line]}"', outsidePage):
-								GHhilight = "OK"
-							else:
-								GHhilight = "NOK"
-							line += 1
-						if GHhilight == "NOK":
-							nokOutside += 1
-							firstError = printNOK(page, link, firstError, "GHLineHilight")
+					# Repeating the checking code here but I'm too lazy now;; See if the final URL is in the URLs we have already.
+					if finalURL in pagesLinksAndAnchors:
+						if linkAnchor in pagesLinksAndAnchors[finalURL]['anchors']:
+							okInternal += 1
 						else:
-							okOutside += 1
-
-					# Tried everything, the anchor is either some 3rd party atrocity or broken (but it's external so we don't treat it as an error just because of those 3rd-party bullshiteries)
+							# printNOK(page, link, firstError, None, redirection)
+							firstError = printNOK(page, link, firstError, None, finalURL)
+							nokInternal += 1
+					# This is a legacy branch and it should never occur. If it does, it means that the page is in our (sub)portal (domain + folder) but it wasn't in the sitemap. Leaving this here because it might prove to be a good way to check for incomplete sitemap. Should this be unwanted, then this branch needs to redirect to the branch which gets outside page to check it.
 					else:
-						firstError = printNOK(page, link, firstError, "externalNOK")
-						nokOutside += 1
-				# Apparently the page doesn't exist (other possible issues can be 403, 500 or other error codes, we don't really care what exactly it is)
-				except:
-					firstError = printNOK(page, link, firstError, "404")
-					unreachable += 1
+						# printNOK(page, link, firstError, "unreachable", redirection)
+						firstError = printNOK(page, link, firstError, "unreachable", finalURL)
+						notInSitemap += 1
+
+			# The link leads outside the (sub)portal, let's download them and see if the anchor exists in the target page (but only if user didn't prohibit this by the -x switch)
 			else:
-				firstError = printNOK(page, link, firstError, "cantGoOutside")
+				if noExternal == False:
+					# The try/except structure is here to test whether the page exists (the potential 404 kills the whole script by Python throwing an exception).
+					try:
+						# if the link seems to be relative (doesn't start with 'http' but with '/' so it leads to the domain but not to the domain+folder path), so let's add the domain to it.
+						if re.match(r'^/', link):
+							link = domain + link
 
+						# Build the request for the outside page. Since some sites apparently don't like the Python3's URLlib user agent (e.g. diagrams.net), we need to set it to something they'll like (hence the headers={...} part.
+						# req = urllib.request.Request(link, headers={'User-Agent': 'Mozilla/5.0'})
 
-	for link in pagesLinksAndAnchors[page]["normal-links"]:
-		# If the link is relative, let's try to add the domain to it to make it absolute including the protocol.
-		if re.match(r'^/', link):
-			link = domain + link
+						# Get the outside page
+						# outsidePage = str(urllib.request.urlopen(req).read())
+						browser.get(link)
+						# time.sleep(4)
+						outsidePage = browser.page_source
 
-		# Avoid loading the same links again and again (headers, navigation, footers, ...)
-		if link in checkedLinks:
-			if checkedLinks[link]['status'] == "NOK":
-				firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
-				unreachable += 1
+						# Get base URL and anchor from the link
+						outsideLinkBaseURL = re.search(r'(.*?)#', link).group(1)
+						outsideLinkAnchor = re.search(r'#(.*)', link).group(1)
+						
+						# First try the normal anchor system - anchors go to IDs in the page
+						if re.search(rf'id="{outsideLinkAnchor}"', outsidePage):
+							okAnchorOutside += 1
 
-		else:
-			# Remove some links from the testing (e.g., fonts)
-			if not (re.match(r'woff2?$', link) \
-			        or re.match('mailto:', link) \
-			        or re.match(r'https?://localhost', link) \
-			        or re.match(r'https?://127.0.0.1', link) \
-			       ):
-				checkedLinks[link] = {}
-				try:
-					req = requests.head(link)
-					if req.status_code > 399:
-						checkedLinks[link]['status'] = "NOK"
-						checkedLinks[link]['code'] = req.status_code
-						firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", req.status_code)
+						# Delete the GitHub workaround, we're not using it anyway
+						# If that fails, it can also be GitHub's bullshitery - they don't give <hX> tags IDs but put an <a class="anchor" href="#anchor"...> links inside them with the href="#anchor" in lowercase (hence the , re.IGNORECASE) and use JavaScript to scroll down to the link. So let's search for that before we give up entirely and say the anchor is bad. This is fragile, BTW - if they change the structure of the link, this test will fail.
+						elif re.search(rf'class="anchor".*?href="#{outsideLinkAnchor}', outsidePage, re.IGNORECASE):
+							okAnchorOutside += 1
+
+						elif re.search(rf'#L\d+(-L\d+)?', link):
+							# We split the potential lines range to two items bcs the whole anchor isn't in the page source - we need to search for bounderies of the highlight (e.g. #L80-L86 will be both IDs to check)
+							hilightRange = outsideLinkAnchor.split("-")
+							line = 0
+							while line < len(hilightRange):
+								if re.search(rf'id="{hilightRange[line]}"', outsidePage):
+									GHhilight = "OK"
+								else:
+									GHhilight = "NOK"
+								line += 1
+							if GHhilight == "NOK":
+								nokAnchorOutside += 1
+								firstError = printNOK(page, link, firstError, "GHLineHilight")
+							else:
+								okAnchorOutside += 1
+
+						# Tried everything, the anchor is either some 3rd party atrocity or broken (but it's external so we don't treat it as an error just because of those 3rd-party bullshiteries)
+						else:
+							firstError = printNOK(page, link, firstError, "externalNOK")
+							nokAnchorOutside += 1
+					# Apparently the page doesn't exist (other possible issues can be 403, 500 or other error codes, we don't really care what exactly it is)
+					except:
+						firstError = printNOK(page, link, firstError, "404")
 						unreachable += 1
-					else:
-						checkedLinks[link]['status'] = "OK"
+				else:
+					firstError = printNOK(page, link, firstError, "cantGoOutside")
+		# print("unreachable: " + str(unreachable))
+		if beVerbose:
+			debugTime = printDebugTime("Processing anchor links for " + page + " took", debugTime, startTime)
 
-				except:
-					checkedLinks[link]['status'] = "NOK"
-					checkedLinks[link]['code'] = "unknown"
-					firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", "unknown")
+		# According to the docs, using sessions can significantly improve performance -- "if you’re making several requests to the same host, the underlying TCP connection will be reused"
+		# https://requests.readthedocs.io/en/latest/user/advanced/#session-objects
+		sessionForRequests = requests.Session()
+
+		# Add an accepted user agent to the Sessions so certain pages (like prerender.io) don't block the requests with 403:
+		sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:12.0) Gecko/20100101 Firefox/12.0'})
+
+		for link in pagesLinksAndAnchors[page]["normal-links"]:
+			# If the link is relative, add the domain to it to make it absolute including the protocol.
+			if re.match(r'^/', link):
+				link = domain + link
+
+			# Avoid loading the same links again and again (headers, navigation, footers, ...)
+			if link in checkedLinks:
+				if checkedLinks[link]['status'] == "OK":
+					okNormalLinks += 1
+				else:
+					firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
 					unreachable += 1
-	
 
-	# Counter of the number of checked pages
-	pagesChecked += 1
+			else:
+				# Remove some links from the testing (e.g., fonts, localhosts, example domains, and codepen which blocks Requests entirely with 403)
+				if not (re.search(r'woff2?$', link) \
+				        or re.match('mailto:', link) \
+				        or re.match(r'https?://localhost', link) \
+				        or re.match(r'https?://127.0.0.1', link) \
+				        or re.search(r'learn/pdf/\?url', link) \
+				        or re.search('example.com', link) \
+				        or re.search('example.org', link) \
+				        or re.search('codepen.io', link) \
+				       ):
+					checkedLinks[link] = {}
+					try:
+						try:
+							req = sessionForRequests.get(link, timeout=5)
+							if req.status_code > 399:
+								checkedLinks[link]['status'] = "NOK"
+								checkedLinks[link]['code'] = req.status_code
+								firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", req.status_code)
+								unreachable += 1
+							else:
+								checkedLinks[link]['status'] = "OK"
+								checkedLinks[link]['code'] = req.status_code
+								okNormalLinks += 1
+						except:
+							checkedLinks[link]['status'] = "NOK"
+							checkedLinks[link]['code'] = "unknown"
+							firstError = printNOK(page, link, firstError, "normalLinkTimeout", "", req.status_code)
 
-	if beVerbose:
-		debugTime = printDebugTime("Checking the " + pagesLinksAndAnchors[page]['title'] + " page took", debugTime, startTime)
+					except:
+						checkedLinks[link]['status'] = "NOK"
+						checkedLinks[link]['code'] = "unknown"
+						firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", "unknown")
+						unreachable += 1
 
+			# print("unreachable: " + str(unreachable))
 
-# Finished, close temporary headless Firefox and print statistics
-browser.quit()
+		if beVerbose:
+			debugTime = printDebugTime("Processing normal links for " + page + " took", debugTime, startTime)		
 
-# TODO -- tohle vratit pred nasazenim do Azure
-try:
-    line = os.popen('tasklist /v').read().strip().split('\n')
-    name  = "geckodriver.exe"
-    for i in range(len(r)):
-        if name in line[i]:
-            os.system("taskkill /im %s /f" %(name))
-                print("Process Successfully terminated")
-  
-except: 
-	print("Error Encountered while running script") 
+		# Counter of the number of checked pages
+		pagesChecked += 1
 
+	# Finished, close temporary headless Firefox and print statistics
+	printStats()
+	browser.quit()
 
-print(color.BOLD + "\n===== STATS ===== " + color.END + " \nTotal pages checked: " + str(pagesChecked) + "\nOK (in-page): " + str(okInPage) + "\nOK (internal): " + str(okInternal) + "\nNOK (in-page): " + str(nokInPage) + "\nNOK (internal): " + str(nokInternal) + "\nNot in sitemap: " + str(notInSitemap) + "\nOK outside portal: " + str(okOutside) + "\nNOK outside portal: " + str(nokOutside) + "\nAbsolute URLs within domain: " + str(absorel) + "\nUnreachable links: " + str(unreachable) + "\n\nScript execution time: " + str(round(time.time() - startTime)) + " sec.")
+	# TODO -- tohle vratit pred nasazenim do Azure
+	# try:
+	#	line = os.popen('tasklist /v').read().strip().split('\n')
+	#     name  = "geckodriver.exe"
+	#     for i in range(len(r)):
+	#         if name in line[i]:
+	#             os.system("taskkill /im %s /f" %(name))
+	#             print("Process Successfully terminated")
+	  
+	# except: 
+	# 	print("Error Encountered while running script") 
+	sys.exit(exitCode)
 
-sys.exit(exitCode)
+except Exception:
+	print("Error occured or interuption code (^C) caught, terminating now.")
+	exitCode = 1
+	printStats()
+	browser.quit()
+	print("The exception:")
+	traceback.print_exc()
+	sys.exit(exitCode)
