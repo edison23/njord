@@ -152,17 +152,15 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] External anchor doesn't seem to exist: " + color.END + ln)
 			first = False
 
-	# External broken anchor, we're treating it as a warning only
+	# External link either didn't resolve on DNS level, or timed out.
 	elif type == "normalLinkUnreachable":
-		internalExitCode = 1
-		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Link unreachable (with HTTP code " + str(errorCode) + "): " + color.END + ln)
+		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Link unreachable (HTTP code " + str(errorCode) + "): " + color.END + ln)
 		first = False
 
-	# External broken anchor, we're treating it as a warning only
-	elif type == "normalLinkTimeout":
-		if beQuiet == False:
-			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] Link timed out, manual check advised: " + color.END + ln)
-			first = False
+	# External link either didn't resolve on DNS level, or timed out.
+	elif type == "normalLinkUnresolved":
+		print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] URL resolution or time-out error. Manual check advised (HTTP code " + str(errorCode) + "): " + color.END + ln)
+		first = False
 
 	# we can positively say the ID (anchor) isn't in the target page
 	else:
@@ -314,7 +312,9 @@ try:
 
 			# This will be used to just warn user that they have relative link that's not implemented as relative (starts with the domain instead of just slash).
 			if re.match(domain, anchorLinks[i]):
-				wasAbsorel[URL] = anchorLinks[i]
+				if not URL in wasAbsorel:
+					wasAbsorel[URL] = []
+				wasAbsorel[URL].append(anchorLinks[i])
 				absorel += 1
 
 			# Replace the relative URL prefix with full URL
@@ -361,6 +361,7 @@ try:
 			# Inform user the link is absolute even though it's within the domain
 			try:
 				if link in wasAbsorel[page]:
+					# print("IF LINK IN ABSOREL: " + link)
 					firstError = printNOK(page, link, firstError, "absorel")
 			except:
 				pass
@@ -473,10 +474,12 @@ try:
 
 		# According to the docs, using sessions can significantly improve performance -- "if you’re making several requests to the same host, the underlying TCP connection will be reused"
 		# https://requests.readthedocs.io/en/latest/user/advanced/#session-objects
+		# Potentially useful for setting up retry policy: https://stackoverflow.com/a/47475019/2216968 (from requests.adapters import HTTPAdapter and from urllib3.util.retry import Retry)
 		sessionForRequests = requests.Session()
 
-		# Add an accepted user agent to the Sessions so certain pages (like prerender.io) don't block the requests with 403:
-		sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:12.0) Gecko/20100101 Firefox/12.0'})
+		# Add an accepted user agent to the Sessions so certain pages (like prerender.io) don't block the requests with 403 or close the connection without a response altogether:
+		# sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:12.0) Gecko/20100101 Firefox/12.0'})
+		sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36'})
 
 		for link in pagesLinksAndAnchors[page]["normal-links"]:
 			# If the link is relative, add the domain to it to make it absolute including the protocol.
@@ -493,37 +496,46 @@ try:
 
 			else:
 				# Remove some links from the testing (e.g., fonts, localhosts, example domains, and codepen which blocks Requests entirely with 403)
+				# 	Zapier.com is OK with headless Firefox but refuses requests library
+				#	Cloudflare refuses everything, possible solution is another webdriver: https://stackoverflow.com/questions/68289474/selenium-headless-how-to-bypass-cloudflare-detection-using-selenium
+				#	'%7B' is URL-encoded curly bracket '{' -- used in example URLs to encapsulate variables ('{var}')
 				if not (re.search(r'woff2?$', link) \
+				        or re.match('blob:https://kontent.ai', link) \
+				        or re.match('https://assets-us-01.kc-usercontent.com', link) \
+				        or re.match('https://player.vimeo.com/video/', link) \
 				        or re.match('mailto:', link) \
-				        or re.match(r'https?://localhost', link) \
 				        or re.match(r'https?://127.0.0.1', link) \
-				        or re.search(r'learn/pdf/\?url', link) \
+				        or re.match(r'https?://deliver.kontent.ai', link) \
+				        or re.match(r'https?://localhost', link) \
+				        or re.match(r'https?://manage.kontent.ai', link) \
+				        or re.match(r'https?://preview-graphql.kontent.ai', link) \
+				        or re.search('%7B', link) \
+				        or re.search('cloudflare.com', link) \
+				        or re.search('codepen.io', link) \
 				        or re.search('example.com', link) \
 				        or re.search('example.org', link) \
-				        or re.search('codepen.io', link) \
+				        or re.search('file-name', link) \
+				        or re.search('file_name', link) \
+				        or re.search('filename', link) \
+				        or re.search('zapier.com', link) \
+				        or re.search(r'learn/pdf/\?url', link) \
 				       ):
 					checkedLinks[link] = {}
 					try:
-						try:
-							req = sessionForRequests.get(link, timeout=5)
-							if req.status_code > 399:
-								checkedLinks[link]['status'] = "NOK"
-								checkedLinks[link]['code'] = req.status_code
-								firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", req.status_code)
-								unreachable += 1
-							else:
-								checkedLinks[link]['status'] = "OK"
-								checkedLinks[link]['code'] = req.status_code
-								okNormalLinks += 1
-						except:
+						req = sessionForRequests.get(link, timeout=5)
+						if req.status_code > 399:
 							checkedLinks[link]['status'] = "NOK"
-							checkedLinks[link]['code'] = "unknown"
-							firstError = printNOK(page, link, firstError, "normalLinkTimeout", "", req.status_code)
-
+							checkedLinks[link]['code'] = req.status_code
+							firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", req.status_code)
+							unreachable += 1
+						else:
+							checkedLinks[link]['status'] = "OK"
+							checkedLinks[link]['code'] = req.status_code
+							okNormalLinks += 1
 					except:
 						checkedLinks[link]['status'] = "NOK"
 						checkedLinks[link]['code'] = "unknown"
-						firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", "unknown")
+						firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", "unknown") # we can't print req.status_code here because it a value from the previous successful try block.
 						unreachable += 1
 
 			# print("unreachable: " + str(unreachable))
@@ -559,3 +571,6 @@ except Exception:
 	print("The exception:")
 	traceback.print_exc()
 	sys.exit(exitCode)
+
+
+
