@@ -124,12 +124,12 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 	# 	But if the 'quiet' switch is on and the issue is only warning, then we mustn't print the headline because it'd be only headline and no issue beneath it (we don't print warnings when we're told to be quiet).
 	if first == True  \
 		and not (beQuiet == True  \
- 				  and (   type == 'absorel'  \
- 				       or type == 'unreachable'  \
- 				       or type == 'cantGoOutside'  \
- 				       or type == 'externalNOK')  \
- 				  or type == 'sitemapNotFound' \
- 				):
+				  and (   type == 'absorel'  \
+					   or type == 'unreachable'  \
+					   or type == 'cantGoOutside'  \
+					   or type == 'externalNOK')  \
+				  or type == 'sitemapNotFound' \
+				):
 		print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
 
 	# Outside page threw 404
@@ -218,21 +218,21 @@ checkedLinks = {}
 # Function to print stats when the script finishes
 def printStats():
 	print(color.BOLD + "\n===== STATS ===== " + color.END + \
-	      " \nTotal URLs in sitemap: " + str(linksInSitemap) + \
-	      " \nTotal pages the DB: " + str(len(pagesLinksAndAnchors)) + \
-	      " \nTotal pages checked: " + str(pagesChecked) + \
-	      "\nAnchor links: " + \
-	      "\n\tOK - in-page: " + str(okInPage) + \
-	      "\n\tOK - internal: " + str(okInternal) + \
-	      "\n\tNOK - in-page: " + str(nokInPage) + \
-	      "\n\tNOK - internal: " + str(nokInternal) + \
-	      "\n\tOK outside portal: " + str(okAnchorOutside) + \
-	      "\n\tNOK outside portal: " + str(nokAnchorOutside) + \
-	      "\nOK - normal links: " + str(okNormalLinks) + " (" + str(len(checkedLinks)) + " unique)" \
-	      "\nUnreachable links: " + str(unreachable) + \
-	      "\nAbsolute URLs within Domain: " + str(absorel) + \
-	      "\nPages not in sitemap: " + str(notInSitemap) + \
-	      "\n\nScript execution time: " + str(round(time.time() - startTime)) + " sec.")
+		  " \nTotal URLs in sitemap: " + str(linksInSitemap) + \
+		  " \nTotal pages the DB: " + str(len(pagesLinksAndAnchors)) + \
+		  " \nTotal pages checked: " + str(pagesChecked) + \
+		  "\nAnchor links: " + \
+		  "\n\tOK - in-page: " + str(okInPage) + \
+		  "\n\tOK - internal: " + str(okInternal) + \
+		  "\n\tNOK - in-page: " + str(nokInPage) + \
+		  "\n\tNOK - internal: " + str(nokInternal) + \
+		  "\n\tOK outside portal: " + str(okAnchorOutside) + \
+		  "\n\tNOK outside portal: " + str(nokAnchorOutside) + \
+		  "\nOK - normal links: " + str(okNormalLinks) + " (" + str(len(checkedLinks)) + " unique)" \
+		  "\nUnreachable links: " + str(unreachable) + \
+		  "\nAbsolute URLs within Domain: " + str(absorel) + \
+		  "\nPages not in sitemap: " + str(notInSitemap) + \
+		  "\n\nScript execution time: " + str(round(time.time() - startTime)) + " sec.")
 
 # Function used when the 'verbose' parameter is True. Prints how long it took from the last invokation (provided the last invokation was called as `debugTime = printDebugTime("bla bla", debugTime, startTime)`)
 def printDebugTime(message, blockStartTime, scriptStartTime):
@@ -333,7 +333,7 @@ try:
 		i = 0
 		while i < len(anchorLinks):
 			if (\
-				    re.match("#term-definition-term_", anchorLinks[i]) \
+					re.match("#term-definition-term_", anchorLinks[i]) \
 				 or re.match("https://app.diagrams.net", anchorLinks[i]) \
 				 or re.match("https://viewer.diagrams.net", anchorLinks[i]) \
 				 or re.match("https://github.com", anchorLinks[i]) \
@@ -488,28 +488,28 @@ try:
 				#	'%7B' is URL-encoded curly bracket '{' -- used in example URLs to encapsulate variables ('{var}')
 				# Note about speed (from fastest to slowest): re.match('') > re.match(r'') > re.search('') > re.search(r'')
 				if not ( \
-				            re.match('blob:https://kontent.ai', link) \
-				        or  re.match('https://assets-us-01.kc-usercontent.com', link) \
-				        or  re.match('https://player.vimeo.com/video/', link) \
-				        or  re.match('https://business.adobe.com', link) \
-				        or  re.match('mailto:', link) \
-				        or  re.match(r'https?://127.0.0.1', link) \
-				        or  re.match(r'https?://deliver.kontent.ai', link) \
-				        or  re.match(r'https?://localhost', link) \
-				        or  re.match(r'https?://manage.kontent.ai', link) \
-				        or  re.match(r'https?://preview-graphql.kontent.ai', link) \
-				        or re.search('%7B', link) \
-				        or re.search('cloudflare.com', link) \
-				        or re.search('codepen.io', link) \
-				        or re.search('example.com', link) \
-				        or re.search('example.org', link) \
-				        or re.search('file-name', link) \
-				        or re.search('file_name', link) \
-				        or re.search('filename', link) \
-				        or re.search('zapier.com', link) \
-				        or re.search(r'learn/pdf/\?url', link) \
-				        or re.search(r'woff2?$', link) \
-				       ):
+							re.match('blob:https://kontent.ai', link) \
+						or  re.match('https://assets-us-01.kc-usercontent.com', link) \
+						or  re.match('https://player.vimeo.com/video/', link) \
+						or  re.match('https://business.adobe.com', link) \
+						or  re.match('mailto:', link) \
+						or  re.match(r'https?://127.0.0.1', link) \
+						or  re.match(r'https?://deliver.kontent.ai', link) \
+						or  re.match(r'https?://localhost', link) \
+						or  re.match(r'https?://manage.kontent.ai', link) \
+						or  re.match(r'https?://preview-graphql.kontent.ai', link) \
+						or re.search('%7B', link) \
+						or re.search('cloudflare.com', link) \
+						or re.search('codepen.io', link) \
+						or re.search('example.com', link) \
+						or re.search('example.org', link) \
+						or re.search('file-name', link) \
+						or re.search('file_name', link) \
+						or re.search('filename', link) \
+						or re.search('zapier.com', link) \
+						or re.search(r'learn/pdf/\?url', link) \
+						or re.search(r'woff2?$', link) \
+					   ):
 					checkedLinks[link] = {}
 					# Try to get the link. Give it 10 seconds of time to load. 
 					# It can fail gracefully with a HTTP code >399, or end up in the except block like a bad boy with an unknown return code.
@@ -542,13 +542,12 @@ try:
 
 	# Make this try/except block active only when you deploy Njord to Azure
 	try:
-		line = os.popen('tasklist /v').read().strip().split('\n')
-	    name  = "geckodriver.exe"
-	    for i in range(len(r)):
-	        if name in line[i]:
-	            os.system("taskkill /im %s /f" %(name))
-	            print("Process Successfully terminated")
-	  
+		tasklist = os.popen('tasklist /v').read().strip().split('\n')
+		name = "geckodriver.exe"
+		for process in tasklist:
+			if name in process:
+				os.system("taskkill /im %s /f" %(name))
+				print("Process " + str(process) + " Successfully terminated.")
 	except: 
 		print("Error Encountered while terminating geckodriver.exe sub-processes.")
 		traceback.print_exc()
