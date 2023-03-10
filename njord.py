@@ -2,18 +2,16 @@ import argparse
 import os, signal
 import re
 import requests
-import subprocess
 import sys
 import time
 import traceback
-import urllib.request
 from selenium import webdriver
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
 
 # Measure runtime of the script
 startTime = time.time()
 
-# Set exit code var
+# Set the global exit code variable
 exitCode = 0 
 
 # Initialize the first error var. It serves to decide whether to print an issue header or not. See the printNOK() function for details.
@@ -37,25 +35,53 @@ noExternal = args.no_external
 beQuiet = args.quiet
 beVerbose = args.verbose
 
-# If 'folder' doesn't begin with slash, add it. If 'folder' is empty, initialize it with an empty string. (Unset var can't be concatenated with another string like 'domain'.)
-if not re.match('/', folder):
+# Domain and folder parameters cleanup:
+# 	If 'domain' ends with slash, remove the slash.
+if domain[-1] == '/':
+	domain = domain[:-1]
+
+# 	If 'folder' doesn't begin with slash, add it.
+if folder[0] != '/':
 	folder = "/" + folder
+
+# 	If 'folder' ends with slash, remove the slash.
+if folder[-1] == '/':
+	folder = folder[:-1]
+
+# 	If 'folder' is empty, initialize it with an empty string. (Unset var can't be concatenated with another string, such as 'domain'.)
 if folder is None:
 	folder = ""
 
 # Oftentimes, it's easier to work with the whole path.
 URLPath = domain + folder
 
-# Initialize headless Firefox browser. We need it to get cumbersome JS-generated pages like KL MAPI reference. (The initialization can take even a few seconds.)
+# Prepare a session for requests module and initialize headless Firefox.
+# Headless Firefox is used to check validity of anchors. Requests are used to check validity of normal links.
+# Why not use one for both tasks? 
+# 	Requests are much faster and easier to work with but they fail to render the whole content of certain pages which results in missing cca 1k of links to check.
+# 	Headless Firefox is (as any web driver) very slow and resource hungry. However, we need it to get cumbersome JS-generated pages like KL MAPI reference which requests module can't handle. On the other hand, the webdriver's API doesn't return HTTP codes, so we can't use it for links validity, for that's based on the return codes.
+
+# Requests
+# 	According to the docs, using sessions can significantly improve performance -- "if you’re making several requests to the same host, the underlying TCP connection will be reused"
+# 	https://requests.readthedocs.io/en/latest/user/advanced/#session-objects
+# 	Potentially useful for setting up retry policy: https://stackoverflow.com/a/47475019/2216968 (from requests.adapters import HTTPAdapter and from urllib3.util.retry import Retry)
+sessionForRequests = requests.Session()
+
+# 	Add an accepted user agent to the Sessions so certain pages (like prerender.io) don't block the requests with 403 or close the connection without a response altogether:
+# 	sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:12.0) Gecko/20100101 Firefox/12.0'})
+sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36'})
+
+# Headless Firefox
+# 	Initialize headless Firefox browser.
+# 	The initialization and generally page processing can take VERY long time (couple of seconds for the init and then per request).
 opts = FirefoxOptions()
 opts.add_argument("--headless")
-
-# The executable_path isn't mandatory if geckodriver is in PATH
-# browser = webdriver.Firefox(options=opts, executable_path='/usr/bin/geckodriver')
 browser = webdriver.Firefox(options=opts)
+# Optional for possible future reference. The executable_path isn't mandatory if geckodriver is in ${PATH}.
+# browser = webdriver.Firefox(options=opts, executable_path='/usr/bin/geckodriver')
 
 # Define colors. 
-# If the OS we're on is Windows, drop that and just fill them with empty strings because colors in command prompt on Windows are too much pain.
+# If the OS we're on is Windows, drop that and just fill the variables with empty strings. Handling colors in Windows command prompt isn't worth the effort.
 if sys.platform != 'win32':
 	class color:
 		PURPLE = '\033[95m'
@@ -94,8 +120,8 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 	internalExitCode = exitCode
 
 	# Decide whether to print the headline (which page has issues). The logic behind this is:
-	# We print the headline only if it's the 1st error for the page. 
-	# But if the 'quiet' switch is on and the issue is only warning, then we mustn't print the headline because it'd be only headline and no issue beneath it (we don't print warnings when we're told to be quiet).
+	# 	We print the headline only if it's the 1st error for the page. 
+	# 	But if the 'quiet' switch is on and the issue is only warning, then we mustn't print the headline because it'd be only headline and no issue beneath it (we don't print warnings when we're told to be quiet).
 	if first == True  \
 		and not (beQuiet == True  \
  				  and (   type == 'absorel'  \
@@ -108,7 +134,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 
 	# Outside page threw 404
 	if type == '404':
-		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Outsite link unreachable: " + color.END + ln)
+		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Outsite anchor link unreachable: " + color.END + ln)
 		internalExitCode = 1
 		first = False
 
@@ -192,6 +218,8 @@ checkedLinks = {}
 # Function to print stats when the script finishes
 def printStats():
 	print(color.BOLD + "\n===== STATS ===== " + color.END + \
+	      " \nTotal URLs in sitemap: " + str(linksInSitemap) + \
+	      " \nTotal pages the DB: " + str(len(pagesLinksAndAnchors)) + \
 	      " \nTotal pages checked: " + str(pagesChecked) + \
 	      "\nAnchor links: " + \
 	      "\n\tOK - in-page: " + str(okInPage) + \
@@ -214,26 +242,27 @@ def printDebugTime(message, blockStartTime, scriptStartTime):
 if beVerbose:
 	debugTime = printDebugTime("Initialization took", startTime, startTime)
 
+# Get the sitemap
 try:
-
 	# Open locally saved sitemap
 	# sitemap=str(open("sitemap.xml", "r").read())
 
-	# Get the whole live sitemap, read the HTTP object and convert it to string. Requires import urllib.request
+	# Get the whole live sitemap, read the HTTP object and convert it to string. Requires import requests.
 	# Tips for KKD sitemap locations:
 		# Preview: https://kcd-web-preview-master.azurewebsites.net/learn/sitemap.xml
 		# Live: https://kontent.ai/learn/sitemap.xml
 	if manualSitemapLoc:
 		print("Getting the remote sitemap from manually selected location: " + manualSitemapLoc)
 		try:
-			sitemap = str(urllib.request.urlopen(manualSitemapLoc).read())
+			sitemap = sessionForRequests.get(manualSitemapLoc).text
 		except:
 			firstError = printNOK("", manualSitemapLoc, True, "sitemapNotFound")
 			sys.exit(exitCode)
 	else:
-		print("Getting the remote sitemap. Assuming it's at " + domain + folder + "/sitemap.xml\n") # (As it should according to https://www.sitemaps.org/protocol.html#location)")
+		# Automatically guess sitemap location. It should domain+folder+'/sitemap.xml' according to https://www.sitemaps.org/protocol.html#location)".
+		print("Getting the remote sitemap. Assuming it's at " + domain + folder + "/sitemap.xml\n") 
 		try:
-			sitemap = str(urllib.request.urlopen(domain + folder + "/sitemap.xml").read())
+			sitemap = sessionForRequests.get(domain + folder + "/sitemap.xml").text
 		except:
 			firstError = printNOK("", domain + folder + "/sitemap.xml", True, "sitemapNotFound")
 			sys.exit(exitCode)
@@ -242,8 +271,9 @@ try:
 		debugTime = printDebugTime("Getting the sitemap took", debugTime, startTime)
 
 	# Find all URLs with the URLPath in the sitemap file. "rf" in findall meaninings: r=regex, f=allow variables in the string searched for. 
-	# Regexes require import re.
+	# Regexes (and all the match, search, and findall) require import re.
 	URLs = re.findall(rf'({URLPath}.*?)</loc>', sitemap)
+	linksInSitemap = len(URLs)
 
 	if beVerbose:
 		debugTime = printDebugTime("Parsing the URLs in the sitemap took", debugTime, startTime)
@@ -277,7 +307,7 @@ try:
 			firstError = printNOK("", URL, firstError, "internalSitemap404")
 
 		# Get the page's <title>
-		title = re.search(rf'<title>(.*?)</title>',page).group(1)
+		title = re.search(rf'<title.*?>(.*?)</title>',page).group(1)
 
 		# Prepare sub-dictionary for the page. See details about the structure above the initiation of the dictionary
 		pagesLinksAndAnchors[URL] = {}
@@ -337,7 +367,7 @@ try:
 	if retrieved == 0:
 		firstError = printNOK(type="noSitemapMatch")
 
-	# Now we go thru every page (URL) we got in the main DB and for each page:
+	# Now, we go thru each page (URL) we got in the main DB and for each page:
 	# 	1/ Check if the anchor links inside it are valid
 	# 	2/ Check if the normal links inside it are valid
 	for page in pagesLinksAndAnchors:
@@ -345,7 +375,7 @@ try:
 		# This is indicator whether we're printing the 1st error for the current page. If yes, then print the page title and URL. If not, don't print that, just print the error.
 		firstError = True
 
-		# Check each anchor link within the current page
+		# Check anchor links within the current page
 		for link in pagesLinksAndAnchors[page]["anchor-links"]:
 
 			# Inform user the link is absolute even though it's within the domain
@@ -353,6 +383,7 @@ try:
 				if link in wasAbsorel[page]:
 					firstError = printNOK(page, link, firstError, "absorel")
 			except:
+				# It isn't. Nothing to report.
 				pass
 
 			# If the link is an in-page anchor link
@@ -364,10 +395,12 @@ try:
 					nokInPage += 1
 
 			# If the link is an anchor link to another page inside the portal
-			# POZNAMKA: potencialni chyba: odstranil jsem regexovani z hledani re.match:
 			elif re.match(f'{URLPath}', link):
+				# Split the link to the base link and the anchor by the hash character
 				linkBaseURL = re.search(fr'(.*?)#', link).group(1)
 				linkAnchor = re.search(fr'#(.*)', link).group(1)
+
+				# See if we have the link in the internal DB; if yes, see if the anchor is in the target page
 				if linkBaseURL in pagesLinksAndAnchors:
 					if linkAnchor in pagesLinksAndAnchors[linkBaseURL]['anchors']:
 						okInternal += 1
@@ -375,81 +408,60 @@ try:
 					else:
 						firstError = printNOK(page, link, firstError)
 						nokInternal += 1
+
+				# See if it isn't just a redirect
+				# requests.get() gets history with return HTTP codes, .url contains the final landing URL. Requires import requests
 				else:
-					# See if it isn't just a redirect - requests.get() gets history with return HTTP codes, .url contains the final landing URL. Requires import requests
-					# redirection = ""
-					# print("baseURL: " + linkBaseURL)
 					finalURL = requests.get(linkBaseURL).url
-					# print("finalURL: " + finalURL)
-					# print("link: " + link)
 
-					# removed printing of the redirection info bcs it's redundant
-					# if finalURL != linkBaseURL:
-						# redirection = " ===> " + finalURL
-
-					# Repeating the checking code here but I'm too lazy now;; See if the final URL is in the URLs we have already.
+					# See if the final URL is in the internal DB.
 					if finalURL in pagesLinksAndAnchors:
 						if linkAnchor in pagesLinksAndAnchors[finalURL]['anchors']:
 							okInternal += 1
 						else:
-							# printNOK(page, link, firstError, None, redirection)
 							firstError = printNOK(page, link, firstError, None, finalURL)
 							nokInternal += 1
-					# This is a legacy branch and it should never occur. If it does, it means that the page is in our (sub)portal (domain + folder) but it wasn't in the sitemap. Leaving this here because it might prove to be a good way to check for incomplete sitemap. Should this be unwanted, then this branch needs to redirect to the branch which gets outside page to check it.
+					# This branch should never occur. If it does, it means that the page is in our (sub)portal (domain + folder) but it isn't in the sitemap. It might prove to be a good way to check for an incomplete sitemap.
 					else:
-						# printNOK(page, link, firstError, "unreachable", redirection)
 						firstError = printNOK(page, link, firstError, "unreachable", finalURL)
 						notInSitemap += 1
 
-			# The link leads outside the (sub)portal, let's download them and see if the anchor exists in the target page (but only if user didn't prohibit this by the -x switch)
+			# The link leads outside the (sub)portal.
+			# Let's download the page and see if the anchor exists in the target page (but only if user didn't prohibit this by the -x switch).
 			else:
 				if noExternal == False:
-					# Try whether the page exists, if it does, test it. Otherwise, assume 404 or other error that killed the try block. We don't care, it's simply unreachable.
+					# Try whether the page exists, if it does, test it. Otherwise, assume 404 or other error killed the try block. We don't care, it's simply unreachable.
 					try:
-						# if the link seems to be relative (doesn't start with 'http' but with '/' so it leads to the domain but not to the domain+folder path), so let's add the domain to it.
-						if re.match(r'^/', link):
-							link = domain + link
-
-						# Build the request for the outside page. Since some sites apparently don't like the Python3's URLlib user agent (e.g. diagrams.net), we need to set it to something they'll like (hence the headers={...} part.
-						# req = urllib.request.Request(link, headers={'User-Agent': 'Mozilla/5.0'})
-
 						# Get the outside page
-						# outsidePage = str(urllib.request.urlopen(req).read())
 						browser.get(link)
-						# time.sleep(4)
 						outsidePage = browser.page_source
 
 						# Get base URL and anchor from the link
 						outsideLinkBaseURL = re.search(r'(.*?)#', link).group(1)
 						outsideLinkAnchor = re.search(r'#(.*)', link).group(1)
 						
-						# First try the normal anchor system - anchors go to IDs in the page
+						# Try the normal anchor system - anchors go to IDs in HTML
 						if re.search(rf'id="{outsideLinkAnchor}"', outsidePage):
 							okAnchorOutside += 1
 
-						# Tried everything, the anchor is either some 3rd party atrocity or broken (but it's external so we don't treat it as an error just because of those 3rd-party bullshiteries)
+						# Anchor not found. The anchor is either some 3rd-party atrocity, or broken.
+						# (But it's external so we don't treat it as an error, because it might be some of those 3rd-party bullshiteries.)
 						else:
 							firstError = printNOK(page, link, firstError, "externalNOK")
 							nokAnchorOutside += 1
-					# Apparently the page doesn't exist (other possible issues can be 403, 500 or other error codes, we don't really care what exactly it is)
+					# Apparently the page doesn't exist (other possible issues can be 403, 500 or other codes >399, we don't really care what exactly it is)
 					except:
 						firstError = printNOK(page, link, firstError, "404")
 						unreachable += 1
+
+				# We've been prohibited from going outside the domain+folder -> inform only that we can't check the page.
 				else:
 					firstError = printNOK(page, link, firstError, "cantGoOutside")
-		# print("unreachable: " + str(unreachable))
+
 		if beVerbose:
 			debugTime = printDebugTime("Processing anchor links for " + page + " took", debugTime, startTime)
 
-		# According to the docs, using sessions can significantly improve performance -- "if you’re making several requests to the same host, the underlying TCP connection will be reused"
-		# https://requests.readthedocs.io/en/latest/user/advanced/#session-objects
-		# Potentially useful for setting up retry policy: https://stackoverflow.com/a/47475019/2216968 (from requests.adapters import HTTPAdapter and from urllib3.util.retry import Retry)
-		sessionForRequests = requests.Session()
-
-		# Add an accepted user agent to the Sessions so certain pages (like prerender.io) don't block the requests with 403 or close the connection without a response altogether:
-		# sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:12.0) Gecko/20100101 Firefox/12.0'})
-		sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.103 Safari/537.36'})
-
+		# Check normal (non-anchor) links within the current page
 		for link in pagesLinksAndAnchors[page]["normal-links"]:
 			# If the link is relative, add the domain to it to make it absolute including the protocol.
 			if re.match(r'^/', link):
@@ -464,27 +476,28 @@ try:
 					unreachable += 1
 
 			else:
-				# Remove some links from the testing: (e.g., fonts, localhosts, example domains, and codepen which blocks Requests entirely with 403)
+				# Remove some links from the testing:
 				#	Font
 				#	Random example / showcase domains or parts of URLs
+				#	Codepen.io blocks Requests entirely with 403
 				#	KKD PDF export
 				# 	Zapier.com is OK with headless Firefox but refuses requests library
 				#	Cloudflare refuses everything, possible solution is another webdriver: https://stackoverflow.com/questions/68289474/selenium-headless-how-to-bypass-cloudflare-detection-using-selenium
 				#	player.vimeo.com throws 404, it's used in code samples (which I can't easily separate)
 				#	https://business.adobe.com times out on bots (it looks for more than just a user agent, similar to Zapier or Cloudflare).
 				#	'%7B' is URL-encoded curly bracket '{' -- used in example URLs to encapsulate variables ('{var}')
+				# Note about speed (from fastest to slowest): re.match('') > re.match(r'') > re.search('') > re.search(r'')
 				if not ( \
-				           re.search(r'woff2?$', link) \
-				        or re.match('blob:https://kontent.ai', link) \
-				        or re.match('https://assets-us-01.kc-usercontent.com', link) \
-				        or re.match('https://player.vimeo.com/video/', link) \
-				        or re.match('https://business.adobe.com', link) \
-				        or re.match('mailto:', link) \
-				        or re.match(r'https?://127.0.0.1', link) \
-				        or re.match(r'https?://deliver.kontent.ai', link) \
-				        or re.match(r'https?://localhost', link) \
-				        or re.match(r'https?://manage.kontent.ai', link) \
-				        or re.match(r'https?://preview-graphql.kontent.ai', link) \
+				            re.match('blob:https://kontent.ai', link) \
+				        or  re.match('https://assets-us-01.kc-usercontent.com', link) \
+				        or  re.match('https://player.vimeo.com/video/', link) \
+				        or  re.match('https://business.adobe.com', link) \
+				        or  re.match('mailto:', link) \
+				        or  re.match(r'https?://127.0.0.1', link) \
+				        or  re.match(r'https?://deliver.kontent.ai', link) \
+				        or  re.match(r'https?://localhost', link) \
+				        or  re.match(r'https?://manage.kontent.ai', link) \
+				        or  re.match(r'https?://preview-graphql.kontent.ai', link) \
 				        or re.search('%7B', link) \
 				        or re.search('cloudflare.com', link) \
 				        or re.search('codepen.io', link) \
@@ -495,10 +508,11 @@ try:
 				        or re.search('filename', link) \
 				        or re.search('zapier.com', link) \
 				        or re.search(r'learn/pdf/\?url', link) \
+				        or re.search(r'woff2?$', link) \
 				       ):
 					checkedLinks[link] = {}
 					# Try to get the link. Give it 10 seconds of time to load. 
-					# It can fail gracefully with a HTTP code over 399, or end up in the except block like a bad boy with an unknown return code.
+					# It can fail gracefully with a HTTP code >399, or end up in the except block like a bad boy with an unknown return code.
 					try:
 						req = sessionForRequests.get(link, timeout=10)
 						if req.status_code > 399:
@@ -513,30 +527,34 @@ try:
 					except:
 						checkedLinks[link]['status'] = "NOK"
 						checkedLinks[link]['code'] = "unknown"
-						firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", "unknown") # we can't print req.status_code here because it a value from the previous successful try block.
+						firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", checkedLinks[link]['code']) # we can't print req.status_code here because it's the value from the previous successful try block.
 						unreachable += 1
 
 		if beVerbose:
 			debugTime = printDebugTime("Processing normal links for " + page + " took", debugTime, startTime)		
 
-		# Counter of the number of checked pages
+		# Counter of the number of checked pages (This should, of course, be same as len(pagesLinksAndAnchors), but just to be sure…).
 		pagesChecked += 1
 
-	# Finished, close temporary headless Firefox and print statistics
+	# Finished, close temporary headless Firefox and print statistics.
 	printStats()
 	browser.quit()
 
-	# TODO -- make this active before deploy to Azure
-	# try:
-	#	line = os.popen('tasklist /v').read().strip().split('\n')
-	#     name  = "geckodriver.exe"
-	#     for i in range(len(r)):
-	#         if name in line[i]:
-	#             os.system("taskkill /im %s /f" %(name))
-	#             print("Process Successfully terminated")
+	# Make this try/except block active only when you deploy Njord to Azure
+	try:
+		line = os.popen('tasklist /v').read().strip().split('\n')
+	    name  = "geckodriver.exe"
+	    for i in range(len(r)):
+	        if name in line[i]:
+	            os.system("taskkill /im %s /f" %(name))
+	            print("Process Successfully terminated")
 	  
-	# except: 
-	# 	print("Error Encountered while running script") 
+	except: 
+		print("Error Encountered while terminating geckodriver.exe sub-processes.")
+		traceback.print_exc()
+		exitCode = 1
+		sys.exit(exitCode)
+
 	sys.exit(exitCode)
 
 except Exception:
@@ -548,5 +566,5 @@ except Exception:
 	traceback.print_exc()
 	sys.exit(exitCode)
 
-
-
+# === NOTES ===
+# If we ever want to use Njord for checking content hidden behind Auth0 (i.e. for logged in users): https://auth0.com/docs/quickstart/webapp/python
