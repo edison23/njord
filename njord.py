@@ -183,6 +183,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 	# External normal link either didn't resolve or timed out. We know the HTTP error code, so we treat it as an error.
 	elif type == "normalLinkUnreachable":
 		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Link unreachable (HTTP code " + str(errorCode) + "): " + color.END + ln)
+		internalExitCode = 1
 		first = False
 
 	# We failed to get a normal external link and don't know the HTTP error code, hence treating this as a warning (it could be a working site that just hates us)
