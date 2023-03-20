@@ -36,20 +36,26 @@ beQuiet = args.quiet
 beVerbose = args.verbose
 
 # Domain and folder parameters cleanup:
-# 	If 'domain' ends with slash, remove the slash.
+#	If domain doesn't start with HTTP(S) protocol, add it:
+if not re.match(r'https?://', domain):
+	domain = "https://" + domain
+
+# 	If domain ends with slash, remove the slash.
 if domain[-1] == '/':
 	domain = domain[:-1]
 
+# 	Folder isn't mandatory, first check if it exists.
 # 	If 'folder' doesn't begin with slash, add it.
-if folder[0] != '/':
-	folder = "/" + folder
+if folder:
+	if folder[0] != '/':
+		folder = "/" + folder
 
-# 	If 'folder' ends with slash, remove the slash.
-if folder[-1] == '/':
-	folder = folder[:-1]
+	# 	If 'folder' ends with slash, remove the slash.
+	if folder[-1] == '/':
+		folder = folder[:-1]
 
 # 	If 'folder' is empty, initialize it with an empty string. (Unset var can't be concatenated with another string, such as 'domain'.)
-if folder is None:
+else:
 	folder = ""
 
 # Oftentimes, it's easier to work with the whole path.
@@ -301,6 +307,7 @@ try:
 		try:
 			browser.get(URL)
 			# Wait 6 seconds until atrocities like Management API v2 process all the JS
+			# Try implementing it using this guide: https://stackoverflow.com/a/26567563 (condition: wait for "gatsby-announcer" instead of "IdOfMyElement")
 			if "reference" in URL:
 				time.sleep(6)
 			page = browser.page_source
@@ -388,7 +395,7 @@ try:
 				pass
 
 			# If the link is an in-page anchor link
-			if re.match(rf'#', link):
+			if re.match('#', link):
 				if link.replace("#", "") in pagesLinksAndAnchors[page]["anchors"]:
 					okInPage += 1
 				else:
