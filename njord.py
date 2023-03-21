@@ -503,7 +503,7 @@ try:
 						or  re.match('mailto:', link) \
 						or  re.match(r'https?://127.0.0.1', link) \
 						or  re.match(r'https?://deliver.kontent.ai', link) \
-						or  re.match(r'http?://fonts.cdnfonts.com/css', link) \
+						or  re.match(r'https?://fonts.cdnfonts.com/css', link) \
 						or  re.match(r'https?://localhost', link) \
 						or  re.match(r'https?://manage.kontent.ai', link) \
 						or  re.match(r'https?://preview-graphql.kontent.ai', link) \
