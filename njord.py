@@ -485,7 +485,7 @@ try:
 
 			else:
 				# Remove some links from the testing:
-				#	Font
+				#	Fonts (local and those on cdnfonts, because CDNFonts returns 403 even if the URL is valid)
 				#	Random example / showcase domains or parts of URLs
 				#	Codepen.io blocks Requests entirely with 403
 				#	KKD PDF export
@@ -503,6 +503,7 @@ try:
 						or  re.match('mailto:', link) \
 						or  re.match(r'https?://127.0.0.1', link) \
 						or  re.match(r'https?://deliver.kontent.ai', link) \
+						or  re.match(r'http?://fonts.cdnfonts.com/css', link) \
 						or  re.match(r'https?://localhost', link) \
 						or  re.match(r'https?://manage.kontent.ai', link) \
 						or  re.match(r'https?://preview-graphql.kontent.ai', link) \
