@@ -61,6 +61,8 @@ else:
 # Oftentimes, it's easier to work with the whole path.
 URLPath = domain + folder
 
+print(URLPath)
+
 # Prepare a session for requests module and initialize headless Firefox.
 # Headless Firefox is used to check validity of anchors. Requests are used to check validity of normal links.
 # Why not use one for both tasks? 
@@ -171,7 +173,13 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 	# Anchor link looks like internal but we didn't download it (wasn't in the sitemap?). This error can easily be circumvented by doing additional GET, but it's a nice check for a random sitemap error.
 	elif type == 'unreachable':
 		if beQuiet == False:
-			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] Can't check anchor validity:" + color.END + " the target page not in current DB (probably wasn't in the sitemap). Link: " + redir)
+			# Add the final link destination URL only if it's different from the original URL found in the current page. 
+			# Printing only the redirect wouldn't be helpful because you wouldn't then find it in the page.
+			if link != redir:
+				redirNote = " (Redirects to: " + redir + " )"
+			else:
+				redirNote = ""
+			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] Can't check anchor validity:" + color.END + " the target page not in current DB (probably wasn't in the sitemap). Link: " + link + redirNote)
 			first = False
 
 	# Outside link isn't in DB and 'no-external' is True, so we can't fetch the page to check it (obviously…)
@@ -439,7 +447,7 @@ try:
 					# or there's a URL structure Njord isn't ready for, 
 					# or it's a bug in Njord. 
 					else:
-						firstError = printNOK(page, link, firstError, "unreachable", finalURL + linkAnchor)
+						firstError = printNOK(page, link, firstError, "unreachable", finalURL + "#" + linkAnchor)
 						notInSitemap += 1
 
 			# The link leads outside the (sub)portal.
