@@ -146,7 +146,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 
 	# Remote sitemap not found
 	elif type == 'sitemapNotFound':
-		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Remote sitemap not found under this URL: " + color.END + ln)
+		print(color.RED + color.BOLD + "##vso[task.logissue type=error] Remote sitemap not found under this URL (domain + folder + sitemap.xml): " + color.END + ln)
 		internalExitCode = 1
 		first = False
 
@@ -268,10 +268,15 @@ try:
 	else:
 		# Automatically guess sitemap location. It should domain+folder+'/sitemap.xml' according to https://www.sitemaps.org/protocol.html#location)".
 		print("Getting the remote sitemap. Assuming it's at " + domain + folder + "/sitemap.xml\n") 
+		sitemapURL = domain + folder + "/sitemap.xml"
 		try:
-			sitemap = sessionForRequests.get(domain + folder + "/sitemap.xml").text
+			sitemapReq = sessionForRequests.get(sitemapURL)
+			if sitemapReq < 400:
+				sitemap = sitemapReq.text
+			else:
+				firstError = printNOK("", sitemapURL, True, "sitemapNotFound")
 		except:
-			firstError = printNOK("", domain + folder + "/sitemap.xml", True, "sitemapNotFound")
+			firstError = printNOK("", sitemapURL, True, "sitemapNotFound")
 			sys.exit(exitCode)
 
 	if beVerbose:
@@ -429,9 +434,12 @@ try:
 						else:
 							firstError = printNOK(page, link, firstError, None, finalURL)
 							nokInternal += 1
-					# This branch should never occur. If it does, it means that the page is in our (sub)portal (domain + folder) but it isn't in the sitemap. It might prove to be a good way to check for an incomplete sitemap.
+					# This branch should never occur. If it does, it either means 
+					# that the page is in our (sub)portal (domain + folder) but it isn't in the sitemap (incomplete sitemap), 
+					# or there's a URL structure Njord isn't ready for, 
+					# or it's a bug in Njord. 
 					else:
-						firstError = printNOK(page, link, firstError, "unreachable", finalURL)
+						firstError = printNOK(page, link, firstError, "unreachable", finalURL + linkAnchor)
 						notInSitemap += 1
 
 			# The link leads outside the (sub)portal.
