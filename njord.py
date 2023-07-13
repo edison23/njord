@@ -572,6 +572,10 @@ except Exception:
 	browser.quit()
 	print("The exception:")
 	traceback.print_exc()
+	print("URL:")
+	print(URL)
+	print("Page source code:")
+	print(page)
 	sys.exit(exitCode)
 
 # === NOTES ===
