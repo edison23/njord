@@ -61,8 +61,6 @@ else:
 # Oftentimes, it's easier to work with the whole path.
 URLPath = domain + folder
 
-print(URLPath)
-
 # Prepare a session for requests module and initialize headless Firefox.
 # Headless Firefox is used to check validity of anchors. Requests are used to check validity of normal links.
 # Why not use one for both tasks? 
@@ -130,6 +128,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 	# Decide whether to print the headline (which page has issues). The logic behind this is:
 	# 	We print the headline only if it's the 1st error for the page. 
 	# 	But if the 'quiet' switch is on and the issue is only warning, then we mustn't print the headline because it'd be only headline and no issue beneath it (we don't print warnings when we're told to be quiet).
+	# POZNAMKA - temporarily disable absorel warning altogether, until Bara et al. finalize the way URLs are generated
 	if first == True  \
 		and not (beQuiet == True  \
 				  and (   type == 'absorel'  \
@@ -137,6 +136,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 					   or type == 'cantGoOutside'  \
 					   or type == 'externalNOK')  \
 				  or type == 'sitemapNotFound' \
+				  or type == 'absorel'  \
 				):
 		print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
 
@@ -166,9 +166,11 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 
 	# Internal (relative within the portal) link is constructed in an absolute manner which is suboptimal
 	elif type == 'absorel':
-		if beQuiet == False:
-			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] WARNING: relative link with absolute URL: " + color.END + ln)
-			first = False
+		pass
+		# if beQuiet == False:
+		# 	# POZNAMKA: TEMPORARILY COMMENTING THIS BECAUSE OF OPENAPI ISSUE
+		# 	print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] WARNING: relative link with absolute URL: " + color.END + ln)
+		# 	first = False
 
 	# Anchor link looks like internal but we didn't download it (wasn't in the sitemap?). This error can easily be circumvented by doing additional GET, but it's a nice check for a random sitemap error.
 	elif type == 'unreachable':
@@ -279,13 +281,12 @@ try:
 		sitemapURL = domain + folder + "/sitemap.xml"
 		try:
 			sitemapReq = sessionForRequests.get(sitemapURL)
-			if sitemapReq < 400:
+			if sitemapReq.status_code < 400:
 				sitemap = sitemapReq.text
 			else:
 				firstError = printNOK("", sitemapURL, True, "sitemapNotFound")
 		except:
 			firstError = printNOK("", sitemapURL, True, "sitemapNotFound")
-			sys.exit(exitCode)
 
 	if beVerbose:
 		debugTime = printDebugTime("Getting the sitemap took", debugTime, startTime)
@@ -316,38 +317,45 @@ try:
 	# Go thru the URLs obtained from the sitemap and get anchor links and IDs from them so we can check them later.
 	for URL in URLs:
 		retrieved += 1
-		# Get the page source
+		# Get the document source
+		# Honestly, I'm not sure why we're using browser.get() instead of sessionForRequests.get(), but it seems it's just faster in some cases.
 		try:
 			browser.get(URL)
 			# Wait 6 seconds until atrocities like Management API v2 process all the JS
 			# Try implementing it using this guide: https://stackoverflow.com/a/26567563 (condition: wait for "gatsby-announcer" instead of "IdOfMyElement")
 			if "reference" in URL:
 				time.sleep(6)
-			page = browser.page_source
+			document = browser.page_source
 		except:
 			firstError = printNOK("", URL, firstError, "internalSitemap404")
 
-		# Get the page's <title>
-		title = re.search(rf'<title.*?>(.*?)</title>',page).group(1)
+		# Get the document's <title>
+		try:
+			title = re.search(rf'<title.*?>(.*?)</title>',document).group(1)
+		except:
+			# If we can't get even the title of the document, pass the rest and ignore the URL quietly.
+			pass
 
-		# Prepare sub-dictionary for the page. See details about the structure above the initiation of the dictionary
+		# Prepare sub-dictionary for the document. See details about the structure above the initiation of the dictionary
 		pagesLinksAndAnchors[URL] = {}
 		pagesLinksAndAnchors[URL]['title'] = title
 
-		# Get links with anchors (hash followed by at least one character except for a closing quote) in the page
-		anchorLinks = re.findall(rf'href="([^"]*?#[^\"]+?)"',page)
+		# Get links with anchors (hash followed by at least one character except for a closing quote) in the document
+		anchorLinks = re.findall(rf'href="([^"]*?#[^\"]+?)"', document)
 
-		# Get non-anchor links (opening quotes followed by at least one character and the link doesn't contain a hash) in the page
-		normalLinks = re.findall(rf'<a .*?href="([^"#]+?)"',page)
+		# Get non-anchor links (opening quotes followed by at least one character and the link doesn't contain a hash) in the document
+		normalLinks = re.findall(rf'<a .*?href="([^"#]+?)"', document)
 
-		# Assign the normal links to the main DB of pages w/ links inside them now, as they don't need further cleaning (unlike anchors)
+		# Assign the normal links to the main DB of documents w/ links inside them now, as they don't need further cleaning (unlike anchors)
 		pagesLinksAndAnchors[URL]['normal-links'] = normalLinks
 
 		# Cleaning up some anchor mess. Delete:
 		#   Anchor links that are term definitions inside term definition bubbles (start with "#term-definition-term_"). They're causing false positives since there's no heading with such an ID (https://kontent-ai.atlassian.net/browse/CTC-1009).
-		#   All links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target page).
+		#   All links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target document).
 		#   The "#main" and "#subscribe-breaking-changes-email" anchor links because they're just internal bullshitery in KL.
 		#   All GitHub links, as GH apparently uses JS instead of the standard HTML way to navigate to the correct place.
+		#   Postman app links -- the hash character doesn't mean it's an anchor
+		#   Postman learn -- seems the document is JS generated so we can't effectively check anything. Also, Postman likes to ban us.
 		#   Links longer than 2048 character. These are quite probably some weirdness like links to diagram.net that have the whole diagram encoded into the URL, apparently. The hash character there doesn't stand for an anchor anyway..
 		# Note: We can safely do this in one loop because the loop contains only one condition block and the i var will never get incremented unless nothing gets deleted..
 		# Note: Deleting an item from an array mutates the existing array.
@@ -360,6 +368,8 @@ try:
 				 or re.match("https://github.com", anchorLinks[i]) \
 				 or re.match("#main", anchorLinks[i]) \
 				 or re.match("#subscribe-breaking-changes-email", anchorLinks[i]) \
+				 or re.match("https://app.getpostman.com/run-collection", anchorLinks[i]) \
+				 or re.match("https://learning.postman.com/", anchorLinks[i]) \
 				 or len(anchorLinks[i]) > 2048 \
 				):
 				del anchorLinks[i]
@@ -378,8 +388,8 @@ try:
 		# Assign cleaned anchor links to the main DB
 		pagesLinksAndAnchors[URL]['anchor-links'] = anchorLinks
 
-		# Get HTML ID attributes in the page
-		anchors = re.findall(rf'id="(.*?)"', page)
+		# Get HTML ID attributes in the document
+		anchors = re.findall(rf'id="(.*?)"', document)
 		pagesLinksAndAnchors[URL]['anchors'] = anchors
 
 		if beVerbose:
@@ -417,15 +427,15 @@ try:
 
 			# If the link is an anchor link to another page inside the portal
 			elif re.match(f'{URLPath}', link):
-				# Split the link to the base link and the anchor by the hash character
-				linkBaseURL = re.search(fr'(.*?)#', link).group(1)
+				# Split the link to the base link and the anchor by the hash character. 
+				# Also remove potential trailing slash between the base URL and the anchor
+				linkBaseURL = re.search(fr'(.*?)/?#', link).group(1)
 				linkAnchor = re.search(fr'#(.*)', link).group(1)
 
 				# See if we have the link in the internal DB; if yes, see if the anchor is in the target page
 				if linkBaseURL in pagesLinksAndAnchors:
 					if linkAnchor in pagesLinksAndAnchors[linkBaseURL]['anchors']:
 						okInternal += 1
-
 					else:
 						firstError = printNOK(page, link, firstError)
 						nokInternal += 1
@@ -588,10 +598,14 @@ except Exception:
 	browser.quit()
 	print("The exception:")
 	traceback.print_exc()
-	print("URL:")
+	print("Last processed page URL from the sitemap:")
 	print(URL)
-	print("Page source code:")
-	print(page)
+	if page:
+		print("Last processed page URL in the main DB:")
+		print(page)
+	if link:
+		print("Last processed anchor or normal link:")
+		print(link)
 	sys.exit(exitCode)
 
 # === NOTES ===
