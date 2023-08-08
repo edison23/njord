@@ -528,6 +528,7 @@ try:
 						or  re.match('https://business.adobe.com', link) \
 						or  re.match('mailto:', link) \
 						or  re.match(r'https?://127.0.0.1', link) \
+						or re.match(r'https://azure.microsoft.com/en-us', link) \
 						or  re.match(r'https?://deliver.kontent.ai', link) \
 						or  re.match(r'https?://fonts.cdnfonts.com/css', link) \
 						or  re.match(r'https?://localhost', link) \
