@@ -5,8 +5,9 @@ import requests
 import sys
 import time
 import traceback
-from selenium import webdriver
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
+# from selenium import webdriver
+# from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from playwright.sync_api import sync_playwright 
 
 # Measure runtime of the script
 startTime = time.time()
@@ -80,11 +81,16 @@ sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64
 # Headless Firefox
 # 	Initialize headless Firefox browser.
 # 	The initialization and generally page processing can take VERY long time (couple of seconds for the init and then per request).
-opts = FirefoxOptions()
-opts.add_argument("--headless")
-browser = webdriver.Firefox(options=opts)
+# opts = FirefoxOptions()
+# opts.add_argument("--headless")
+# browser = webdriver.Firefox(options=opts)
 # Optional for possible future reference. The executable_path isn't mandatory if geckodriver is in ${PATH}.
 # browser = webdriver.Firefox(options=opts, executable_path='/usr/bin/geckodriver')
+
+# Headless Firefox using Playwright
+playwright = sync_playwright().start()
+browserPW = playwright.firefox.launch()
+pwPage = browserPW.new_page()
 
 # Define colors. 
 # If the OS we're on is Windows, drop that and just fill the variables with empty strings. Handling colors in Windows command prompt isn't worth the effort.
@@ -137,6 +143,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 					   or type == 'externalNOK')  \
 				  or type == 'sitemapNotFound' \
 				  or type == 'absorel'  \
+				  or type == 'internalSitemap404' \
 				):
 		print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
 
@@ -318,14 +325,16 @@ try:
 	for URL in URLs:
 		retrieved += 1
 		# Get the document source
-		# Honestly, I'm not sure why we're using browser.get() instead of sessionForRequests.get(), but it seems it's just faster in some cases.
+		# Just a reminder: browser is an instance of headless Firefox. sessionForRequests is an instance of requests.
 		try:
-			browser.get(URL)
+			pwResponse = pwPage.goto(URL, timeout=15000)
+			# browser.get(URL)
 			# Wait 6 seconds until atrocities like Management API v2 process all the JS
 			# Try implementing it using this guide: https://stackoverflow.com/a/26567563 (condition: wait for "gatsby-announcer" instead of "IdOfMyElement")
-			if "reference" in URL:
-				time.sleep(6)
-			document = browser.page_source
+			# if "reference" in URL:
+			# 	time.sleep(6)
+			# document = browser.page_source
+			document = pwPage.content()
 		except:
 			firstError = printNOK("", URL, firstError, "internalSitemap404")
 
@@ -467,8 +476,9 @@ try:
 					# Try whether the page exists, if it does, test it. Otherwise, assume 404 or other error killed the try block. We don't care, it's simply unreachable.
 					try:
 						# Get the outside page
-						browser.get(link)
-						outsidePage = browser.page_source
+						# browser.get(link)
+						pwResponse = pwPage.goto(link)
+						outsidePage = pwPage.content()
 
 						# Get base URL and anchor from the link
 						outsideLinkBaseURL = re.search(r'(.*?)#', link).group(1)
@@ -485,7 +495,7 @@ try:
 							nokAnchorOutside += 1
 					# Apparently the page doesn't exist (other possible issues can be 403, 500 or other codes >399, we don't really care what exactly it is)
 					except:
-						firstError = printNOK(page, link, firstError, "404")
+						firstError = printNOK(page, link, firstError, ">399")
 						unreachable += 1
 
 				# We've been prohibited from going outside the domain+folder -> inform only that we can't check the page.
@@ -501,13 +511,13 @@ try:
 			if re.match(r'^/', link):
 				link = domain + link
 
-			# Avoid loading the same links again and again (e.g., headers, navigation, footers, ...)
-			if link in checkedLinks:
-				if checkedLinks[link]['status'] == "OK":
-					okNormalLinks += 1
-				else:
-					firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
-					unreachable += 1
+			# Avoid loading the same links again and again if they're OK (e.g., headers, navigation, footers, ...)
+			# If they're NOK, check them again because the KAI Learn portal is instable and one fail of intrapage may not mean the page is down.
+			if link in checkedLinks and checkedLinks[link]['status'] == "OK":
+				okNormalLinks += 1
+			# else:
+			# 	firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
+			# 	unreachable += 1
 
 			else:
 				# Remove some links from the testing:
@@ -525,46 +535,67 @@ try:
 							re.match('blob:https://kontent.ai', link) \
 						or  re.match('https://assets-us-01.kc-usercontent.com', link) \
 						or  re.match('https://player.vimeo.com/video/', link) \
-						or  re.match('https://business.adobe.com', link) \
 						or  re.match('mailto:', link) \
 						or  re.match(r'https?://127.0.0.1', link) \
-						or re.match(r'https://azure.microsoft.com/en-us', link) \
 						or  re.match(r'https?://deliver.kontent.ai', link) \
-						or  re.match(r'https?://fonts.cdnfonts.com/css', link) \
 						or  re.match(r'https?://localhost', link) \
 						or  re.match(r'https?://manage.kontent.ai', link) \
 						or  re.match(r'https?://preview-graphql.kontent.ai', link) \
 						or re.search('%7B', link) \
-						or re.search('cloudflare.com', link) \
-						or re.search('codepen.io', link) \
 						or re.search('example.com', link) \
 						or re.search('example.org', link) \
 						or re.search('file-name', link) \
 						or re.search('file_name', link) \
 						or re.search('filename', link) \
-						or re.search('zapier.com', link) \
 						or re.search(r'learn/pdf/\?url', link) \
 						or re.search(r'woff2?$', link) \
 					   ):
 					checkedLinks[link] = {}
-					# Try to get the link. Give it 10 seconds of time to load. 
-					# It can fail gracefully with a HTTP code >399, or end up in the except block like a bad boy with an unknown return code.
+
+					# Use Playwright to get the external normal links. Give them 15 sec. to load. I
 					try:
-						req = sessionForRequests.get(link, timeout=10)
-						if req.status_code > 399:
+						pwResponse = pwPage.goto(link, timeout=15000)
+						if pwResponse.status > 399:
 							checkedLinks[link]['status'] = "NOK"
-							checkedLinks[link]['code'] = req.status_code
-							firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", req.status_code)
+							checkedLinks[link]['code'] = pwResponse.status
+							firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
 							unreachable += 1
 						else:
 							checkedLinks[link]['status'] = "OK"
-							checkedLinks[link]['code'] = req.status_code
+							checkedLinks[link]['code'] = pwResponse.status
 							okNormalLinks += 1
 					except:
 						checkedLinks[link]['status'] = "NOK"
-						checkedLinks[link]['code'] = "unknown"
-						firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", checkedLinks[link]['code']) # we can't print req.status_code here because it's the value from the previous successful try block.
+						checkedLinks[link]['code'] = "unknown" # we can't pwResponse.status here because it's the value from the previous successful try block.
+						firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", checkedLinks[link]['code'])
 						unreachable += 1
+
+					# Try to get the link. Give it 10 seconds of time to load. 
+					# It can fail gracefully with a HTTP code >399, or end up in the except block like a bad boy with an unknown return code.
+					# try:
+					# 	req = sessionForRequests.get(link, timeout=40)
+					# 	if req.status_code > 399:
+					# 		checkedLinks[link]['status'] = "NOK"
+					# 		checkedLinks[link]['code'] = req.status_code
+					# 		firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", req.status_code)
+					# 		unreachable += 1
+					# 	else:
+					# 		checkedLinks[link]['status'] = "OK"
+					# 		checkedLinks[link]['code'] = req.status_code
+					# 		okNormalLinks += 1
+					# except:
+					# 	# If requests failed, the link still may be valid, just the external server is picky about whom to serve. We try headless Firefox instead.
+					# 	# We can get return code from headless Firefox request; the only way to check for the result would be parsing the response's source code.
+					# 	# We don't want to parse the source code, we simply rely on the fact that if the try block succeeds, we can assume the link works.
+					# 	# POZNAMKA: Tohle nefunguje, bo napr. u https://www.iconfinder.com/icons/3069735/circle_programming_rails_round_icon_ruby_ruby_rails_icon to vrati tu stranku s "nic jsme nenasli", ale bezhlavy FF to nepozna
+					# 	# If this try/except block fails, we can safely assume the link is really dead.
+					# 	try:
+					# 		browser.get(link)
+					# 	except:
+					# 		checkedLinks[link]['status'] = "NOK"
+					# 		checkedLinks[link]['code'] = "unknown"
+					# 		firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", checkedLinks[link]['code']) # we can't print req.status_code here because it's the value from the previous successful try block.
+					# 		unreachable += 1
 
 		if beVerbose:
 			debugTime = printDebugTime("Processing normal links for " + page + " took", debugTime, startTime)		
@@ -572,9 +603,11 @@ try:
 		# Counter of the number of checked pages (This should, of course, be same as len(pagesLinksAndAnchors), but just to be sure…).
 		pagesChecked += 1
 
-	# Finished, close temporary headless Firefox and print statistics.
+	# Finished, close temporary headless Playwright Firefox, stop the whole Playwright, and print statistics.
 	printStats()
-	browser.quit()
+	# browser.quit()
+	browserPW.close()
+	playwright.stop()
 
 	# Make this try/except block active only when you deploy Njord to Azure
 	try:
