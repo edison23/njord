@@ -139,7 +139,10 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 				  or type == 'absorel' \
 				  or type == 'internalSitemap404' \
 				):
-		print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
+		if pagesLinksAndAnchors:
+			print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
+		else:
+			print("Some intial generic error occurred")
 
 	# Outside page threw 404
 	if type == '404':
@@ -359,8 +362,6 @@ try:
 	if beVerbose:
 		debugTime = printDebugTime("Parsing the URLs in the sitemap took", debugTime, startTime)
 
-	
-
 	# Go thru the URLs obtained from the sitemap and get anchor links and IDs from them so we can check them later.
 	for URL in URLs:
 		retrieved += 1
@@ -369,8 +370,8 @@ try:
 		# Just a reminder: browser is an instance of headless Firefox. sessionForRequests is an instance of requests.
 		try:
 			browser.get(URL)
-			time.sleep(2)
-			# Wait 6 seconds until atrocities like Management API v2 process all the JS
+			time.sleep(1)
+			# Wait 4 more seconds until atrocities like Management API v2 process all the JS
 			# Try implementing it using this guide: https://stackoverflow.com/a/26567563 (condition: wait for "gatsby-announcer" instead of "IdOfMyElement")
 			if "reference" in URL:
 				time.sleep(4)
@@ -444,8 +445,10 @@ try:
 			if beVerbose:
 				debugTime = printDebugTime("Getting the " + URL + " took", debugTime, startTime)
 
-		except:
+		except Exception:
 			firstError = printNOK("", URL, firstError, "cantProcessPage")
+			print("The exception:")
+			traceback.print_exc()
 
 	if retrieved == 0:
 		firstError = printNOK(type="noSitemapMatch")
@@ -457,6 +460,9 @@ try:
 		
 		# This is indicator whether we're printing the 1st error for the current page. If yes, then print the page title and URL. If not, don't print that, just print the error.
 		firstError = True
+
+		# We want to report broken (normal) links only once per page, even if there more of their instances -> this is a DB of NOK links within the page
+		nokLinkMultiCheck = []
 
 		# Check anchor links within the current page
 		for link in pagesLinksAndAnchors[page]["anchor-links"]:
@@ -556,6 +562,11 @@ try:
 			if re.match(r'^/', link):
 				link = domain + link
 
+			# This is a very dirty fix for this bug: [KST-762] KL pages with video contain invalid (404) link to themself but with missing `learn` folder - Kontent.ai Jira (https://kontent-ai.atlassian.net/browse/KST-762)
+			# If the link ends the same as the current page && is missing the `/learn` part (`https://kontent.ai` == 18 chars and `https://kontent.ai/learn` == 24 chars), we don't need to check it -- it's invalid, but if we fixed it to contain the `/learn` part, it'd be the same as the current page which is obviously valid. Hence, we skip this iteration.
+			if link[18:] == page[24:]:
+				continue
+
 			# Remove some links from the testing:
 			#	Fonts (local and those on cdnfonts, because CDNFonts returns 403 even if the URL is valid)
 			#	Random example / showcase domains or parts of URLs
@@ -576,6 +587,7 @@ try:
 					or  re.match('https://azure.microsoft.com/en-us', link) \
 					or  re.match('https://kontent.ai/learn/develop/developer-certification/before-you-start', link) \
 					or  re.match('https://player.vimeo.com/video/', link) \
+					or  re.match('https://www.dta.gov.au/', link) \
 					or  re.match('mailto:', link) \
 					or  re.match(r'https?://127.0.0.1', link) \
 					or  re.match(r'https?://deliver.kontent.ai', link) \
@@ -595,36 +607,38 @@ try:
 				   ):
 
 				# Avoid loading the same links again and again (e.g., headers, navigation, footers, ...)
-				# If the link leads to KAI Learn AND has been checked before AND was not OK, 
+				# If the link leads to KAI Learn AND has been checked before AND was NOK, 
 				# 	let's check it again because the KL web app is unreliable and one fail doesn't mean the page is truly down.
 				# 	The control var for this check is shallWeCheckThis (because you can't base a condition on an array element if you're not sure the el. exists).
-				# We also need a DB of docs links that are checked multiple times to avoid skewing absolute number of NOK links
+				# We also need a DB of links that are checked multiple times within the current page (nokLinkMultiCheck) to avoid reporting one bad link multiple times in a single page
 
 				# Default value
 				shallWeCheckThis = "nope"
-				nokDocsMulticheck = []
 
+				# We checked this link before
 				if link in checkedLinks:
+					# The link is a KL link
 					if re.match('https://kontent.ai/learn', link):
 						if checkedLinks[link]['status'] == "OK":
 							okNormalLinks += 1
 						else:
-							shallWeCheckThis = "DocsNOK"
-							if link not in nokDocsMulticheck:
-								nokDocsMulticheck.append(link)
+							shallWeCheckThis = "VShellPower"
+
+					# The link is an external link
 					else:
 						if checkedLinks[link]['status'] == "OK":
 							okNormalLinks += 1
-
 						else:
 							unreachable += 1
+
+				# We didn't see this link before
 				else:
 					shallWeCheckThis = "VShellPower"
 					
 					# Initialize the entry for the current link in the checked links DB
 					checkedLinks[link] = {}
 
-				if shallWeCheckThis == "DocsNOK" or shallWeCheckThis == "VShellPower":
+				if shallWeCheckThis == "VShellPower":
 					# Try to get the link and its response code
 					# The except block is for the portals that block direct HTTP requests
 					try:
@@ -636,22 +650,20 @@ try:
 							checkedLinks[link]['status'] = "OK"
 							okNormalLinks += 1
 						else:
-							if re.match('https://kontent.ai/learn', link):
+							checkedLinks[link]['status'] = "NOK"
+							unreachable += 1
+							if link not in nokLinkMultiCheck:
+								nokLinkMultiCheck.append(link)
 								firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
-								checkedLinks[link]['status'] = "NOK"
-								if link not in nokDocsMulticheck:
-									unreachable += 1
-							else:
-								checkedLinks[link]['status'] = "NOK"
-								firstError = printNOK(page, link, firstError, "normalLinkUnreachable", "", checkedLinks[link]['code'])
-								unreachable += 1
 					except:
 						checkedLinks[link]['status'] = "NOK"
-						checkedLinks[link]['code'] = "unknown" # We don't know the code because the request got blocked in a nasty way
-						firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", checkedLinks[link]['code'])
+						checkedLinks[link]['code'] = "unknown" # We don't know the code because the request got blocked altogether
 						unreachable += 1
+						if link not in nokLinkMultiCheck:
+							nokLinkMultiCheck.append(link)
+							firstError = printNOK(page, link, firstError, "normalLinkUnresolved", "", checkedLinks[link]['code'])
 				else:
-					# Getting into this branch means that the link's already been check and it was either OK, or it's an external NOK.
+					# Getting into this branch means that the link's already been checked and it was either OK, or it's an external NOK.
 					# Stats counting has been done in the control variable-setting condition block -> we can pass this branch.
 					pass
 
