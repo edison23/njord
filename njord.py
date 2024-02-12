@@ -194,7 +194,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] Can't check anchor validity:" + color.END + " the target page not in current DB (probably wasn't in the sitemap). Link: " + link + redirNote)
 			first = False
 
-	# Outside link isn't in DB and 'no-external' is True, so we can't fetch the page to check it (obviously…)
+	# Outside link isn't in DB and 'no-external' is True, so we can't fetch the page to check it (obviously...)
 	elif type == 'cantGoOutside':
 		if beQuiet == False:
 			print(color.YELLOW + color.BOLD + "##vso[task.logissue type=warning] Can't check anchor validity:" + color.END + " the target page not in current DB and you forbade me to probe pages outside domain + folder (-x switch). Link: " + ln)
@@ -286,13 +286,13 @@ def printDebugTime(message, blockStartTime, scriptStartTime):
 
 def finishAndQuit(errCode=0, browser=None):
 	# Finished, close temporary headless Firefox and print statistics.
-	print("Finished…")
+	print("Finished...")
 	if browser:
-		print("… exiting the browser…")
+		print("... exiting the browser...")
 		browser.quit()
 		printStats()
 
-	print("… and closing.")
+	print("... and closing.")
 	# Make this try/except block active only when you deploy Njord to Azure
 	try:
 		tasklist = os.popen('tasklist /v').read().strip().split('\n')
@@ -366,6 +366,13 @@ try:
 	for URL in URLs:
 		retrieved += 1
 
+		# Ignore product-updates whatsoever becase they're Javascript-paginated. Note: I should figure out a way around this (clicking the Show more button)
+		if (\
+				"product-updates" in URL \
+			 or "developer-certification/before-you-start" in URL \
+			):
+			continue
+
 		# Get the document source
 		# Just a reminder: browser is an instance of headless Firefox. sessionForRequests is an instance of requests.
 		try:
@@ -400,11 +407,13 @@ try:
 			# Cleaning up some anchor mess. Delete:
 			#   Anchor links that are term definitions inside term definition bubbles (start with "#term-definition-term_"). They're causing false positives since there's no heading with such an ID (https://kontent-ai.atlassian.net/browse/CTC-1009).
 			#   All links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target document).
+			# 	DAPI links are sometimes not anchor links (#tag, #section, #operation)
 			#   The "#main" and "#subscribe-breaking-changes-email" anchor links because they're just internal bullshitery in KL.
 			#	Intra-page anchor links in Dev cert -- the page is in the sitemap but it's locked for unsigned users (i.e., Njord) -- this should be fixed by not including the page in the sitemap
 			#   All GitHub links, as GH apparently uses JS instead of the standard HTML way to navigate to the correct place.
 			#   Postman app links -- the hash character doesn't mean it's an anchor
 			#   Postman learn -- seems the document is JS generated so we can't effectively check anything. Also, Postman likes to ban us.
+			# 	Product updates -- see above in the beginning of this loop
 			#   Links longer than 2048 character. These are quite probably some weirdness like links to diagram.net that have the whole diagram encoded into the URL, apparently. The hash character there doesn't stand for an anchor anyway..
 			# Note: We can safely do this in one loop because the loop contains only one condition block and the i var will never get incremented unless nothing gets deleted..
 			# Note: Deleting an item from an array mutates the existing array.
@@ -418,6 +427,10 @@ try:
 					 or re.match("https://app.getpostman.com/run-collection", anchorLinks[i]) \
 					 or re.match("https://github.com", anchorLinks[i]) \
 					 or re.match("https://kontent.ai/learn/develop/developer-certification/before-you-start", anchorLinks[i]) \
+					 or re.match("https://kontent.ai/learn/docs/apis/openapi/delivery-api/#operation", anchorLinks[i]) \
+					 or re.match("https://kontent.ai/learn/docs/apis/openapi/delivery-api/#section", anchorLinks[i]) \
+					 or re.match("https://kontent.ai/learn/docs/apis/openapi/delivery-api/#tag", anchorLinks[i]) \
+					 or re.match("https://kontent.ai/learn/product-updates", anchorLinks[i]) \
 					 or re.match("https://learning.postman.com/", anchorLinks[i]) \
 					 or re.match("https://viewer.diagrams.net", anchorLinks[i]) \
 					 or len(anchorLinks[i]) > 2048 \
@@ -574,7 +587,7 @@ try:
 			#	Codepen.io blocks Requests entirely with 403
 			#	KKD PDF export
 			# 	`auth/login?returnTo` is the "Continue" button which leads to the sign-in form for unsigned users
-			# 	Zapier.com is OK with headless Firefox but refuses requests library
+			# 	Zapier.com is OK with headless Firefox but refuses requests library, Twitter throws 400 to requests, Adobe 403
 			#	Cloudflare refuses everything, possible solution is another webdriver: https://stackoverflow.com/questions/68289474/selenium-headless-how-to-bypass-cloudflare-detection-using-selenium
 			#	player.vimeo.com throws 404, it's used in code samples (which I can't easily separate)
 			#	https://business.adobe.com times out on bots (it looks for more than just a user agent, similar to Zapier or Cloudflare).
@@ -587,6 +600,9 @@ try:
 					or  re.match('https://azure.microsoft.com/en-us', link) \
 					or  re.match('https://kontent.ai/learn/develop/developer-certification/before-you-start', link) \
 					or  re.match('https://player.vimeo.com/video/', link) \
+					or  re.match('https://help.zapier.com/hc/en-us/articles', link) \
+					or  re.match('https://business.adobe.com/products/target', link) \
+					or  re.match('https://twitter.com', link) \
 					or  re.match('https://www.dta.gov.au/', link) \
 					or  re.match('mailto:', link) \
 					or  re.match(r'https?://127.0.0.1', link) \
@@ -670,7 +686,7 @@ try:
 		if beVerbose:
 			debugTime = printDebugTime("Processing normal links for " + page + " took", debugTime, startTime)		
 
-		# Counter of the number of checked pages (This should, of course, be same as len(pagesLinksAndAnchors), but just to be sure…).
+		# Counter of the number of checked pages (This should, of course, be same as len(pagesLinksAndAnchors), but just to be sure...).
 		pagesChecked += 1
 
 	# Finished, close temporary headless Firefox and print statistics.
