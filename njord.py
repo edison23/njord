@@ -598,10 +598,11 @@ try:
 						re.match('blob:https://kontent.ai', link) \
 					or  re.match('https://assets-us-01.kc-usercontent.com', link) \
 					or  re.match('https://azure.microsoft.com/en-us', link) \
+					or  re.match('https://business.adobe.com/products/target', link) \
+					or  re.match('https://graphiql-online.com/', link) \
+					or  re.match('https://help.zapier.com/hc/en-us/articles', link) \
 					or  re.match('https://kontent.ai/learn/develop/developer-certification/before-you-start', link) \
 					or  re.match('https://player.vimeo.com/video/', link) \
-					or  re.match('https://help.zapier.com/hc/en-us/articles', link) \
-					or  re.match('https://business.adobe.com/products/target', link) \
 					or  re.match('https://twitter.com', link) \
 					or  re.match('https://www.dta.gov.au/', link) \
 					or  re.match('mailto:', link) \
