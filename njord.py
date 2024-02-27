@@ -6,7 +6,10 @@ import sys
 import time
 import traceback
 from selenium import webdriver
+from selenium.webdriver.common.by import By
 from selenium.webdriver.firefox.options import Options as FirefoxOptions
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
 
 # Measure runtime of the script
 startTime = time.time()
@@ -137,7 +140,6 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
 					   or type == 'externalNOK')  \
 				  or type == 'sitemapNotFound' \
 				  or type == 'absorel' \
-				  or type == 'internalSitemap404' \
 				):
 		if pagesLinksAndAnchors:
 			print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
@@ -311,6 +313,41 @@ def finishAndQuit(errCode=0, browser=None):
 if beVerbose:
 	debugTime = printDebugTime("Initialization took", startTime, startTime)
 
+# Sign in the browser so that we can get ends of articles, as well as the protected pages.
+# 	The sleep times are required because the login form is slow.
+# 	I should put this to try/except block, but it can survive here like this, too.
+URL_login = "https://kontent.ai/learn/api/auth/login"
+browser.get(URL_login)
+time.sleep(10)
+
+# These waits are most likely useless because we need to wait using the time.sleep() anyway, but they may avert some issues.
+loginEmail = WebDriverWait(browser, 10).until(
+    EC.element_to_be_clickable(browser.find_element(By.NAME, "email"))
+)
+loginPassword = WebDriverWait(browser, 10).until(
+    EC.element_to_be_clickable(browser.find_element(By.NAME, "password"))
+)
+
+# This is a trial account created using a temp mail. It doesn't have access anywhere except the standard Getting started project.
+loginEmail.send_keys("REDACTED")
+loginPassword.send_keys("REDACTED")
+
+# Submit the form and wait
+browser.find_element(By.NAME, "submit").click()
+time.sleep(10)
+
+# Test whether the sign-in succeeded -- load a test page and see if we get "complete the lessons" instead of the "sign in first" error.
+URL_test = "https://kontent.ai/learn/create/walkthrough-for-content-creators/test"
+browser.get(URL_test)
+document = browser.page_source
+
+if "Complete the lessons in this path to unlock the test." in document:
+	print("OK, Njord is signed into KAI Learn.")
+else:
+	print("Njord failed to sign in, cya when I cya.")
+	exitCode = 1
+	finishAndQuit(exitCode, browser)
+
 try:
 	# Get the sitemap
 	# Open locally saved sitemap
@@ -369,7 +406,6 @@ try:
 		# Ignore product-updates whatsoever becase they're Javascript-paginated. Note: I should figure out a way around this (clicking the Show more button)
 		if (\
 				"product-updates" in URL \
-			 or "developer-certification/before-you-start" in URL \
 			):
 			continue
 
@@ -599,12 +635,13 @@ try:
 					or  re.match('https://assets-us-01.kc-usercontent.com', link) \
 					or  re.match('https://azure.microsoft.com/en-us', link) \
 					or  re.match('https://business.adobe.com/products/target', link) \
+					or  re.match('https://csrc.nist.gov/Projects/key-management/key-management-guidelines', link) \
 					or  re.match('https://graphiql-online.com/', link) \
 					or  re.match('https://help.zapier.com/hc/en-us/articles', link) \
-					or  re.match('https://kontent.ai/learn/develop/developer-certification/before-you-start', link) \
 					or  re.match('https://player.vimeo.com/video/', link) \
 					or  re.match('https://twitter.com', link) \
 					or  re.match('https://www.dta.gov.au/', link) \
+					or  re.match('https://www.vic.gov.au/', link) \
 					or  re.match('mailto:', link) \
 					or  re.match(r'https?://127.0.0.1', link) \
 					or  re.match(r'https?://deliver.kontent.ai', link) \
@@ -707,6 +744,3 @@ except Exception:
 		print("Last processed anchor or normal link:")
 		print(link)
 	finishAndQuit(exitCode, browser)
-
-# === NOTES ===
-# If we ever want to use Njord for checking content hidden behind Auth0 (i.e. for logged in users): https://auth0.com/docs/quickstart/webapp/python
