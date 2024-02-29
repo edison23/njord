@@ -641,6 +641,7 @@ try:
 					or  re.match('https://player.vimeo.com/video/', link) \
 					or  re.match('https://twitter.com', link) \
 					or  re.match('https://www.dta.gov.au/', link) \
+					or  re.match('https://www.mozilla.org/firefox', link) \
 					or  re.match('https://www.vic.gov.au/', link) \
 					or  re.match('mailto:', link) \
 					or  re.match(r'https?://127.0.0.1', link) \
