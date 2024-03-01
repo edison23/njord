@@ -348,6 +348,21 @@ else:
 	exitCode = 1
 	finishAndQuit(exitCode, browser)
 
+# Get rid of the cookie bar -- accept all cookies
+# This is needed mainly becuase of the clicking interaction in the Product updates page (pagination loading).
+KLrandomPage = "https://kontent.ai/learn/" # this can be any KL page
+browser.get(KLrandomPage)
+time.sleep(5)
+try:
+	cookieButton = browser.find_element(By.XPATH, "//button[@class='ch2-btn ch2-allow-all-btn ch2-btn-primary']")
+	cookieButton.click()
+	time.sleep(1)
+	print("All cookies accepted.")
+	
+except Exception:
+	print("The cookie accept button not found. Details in the exception:")
+	traceback.print_exc()
+
 try:
 	# Get the sitemap
 	# Open locally saved sitemap
@@ -403,22 +418,39 @@ try:
 	for URL in URLs:
 		retrieved += 1
 
-		# Ignore product-updates whatsoever becase they're Javascript-paginated. Note: I should figure out a way around this (clicking the Show more button)
-		if (\
-				"product-updates" in URL \
-			):
-			continue
-
 		# Get the document source
 		# Just a reminder: browser is an instance of headless Firefox. sessionForRequests is an instance of requests.
 		try:
 			browser.get(URL)
-			time.sleep(1)
 			# Wait 4 more seconds until atrocities like Management API v2 process all the JS
 			# Try implementing it using this guide: https://stackoverflow.com/a/26567563 (condition: wait for "gatsby-announcer" instead of "IdOfMyElement")
 			if "reference" in URL:
 				time.sleep(4)
+			
+			# Product updates are JS-paginated, we need to load the whole page "manually" by clicking the "Show more" button until it's there no more (the while loop)
+			elif ( "learn/product-updates" in URL ):
+				time.sleep(2)
+				print("Getting product-updates page.")
+				def getNextProductUpdatesPage():
+					try:
+						nextButton = browser.find_element(By.XPATH, "//button[@class='button_button__u6okP']")
+						nextButton.click()
+						return True
+					except:
+						return False
+
+				nextPageExists = True
+				i = 0
+				while nextPageExists:
+					nextPageExists = getNextProductUpdatesPage()
+					time.sleep(2)
+					i += 1
+				print("Reached the end of product updates. Clicked the 'Show more' button " + str(i) + " times.")
+			else:
+				time.sleep(1)
+
 			document = browser.page_source
+		
 		except:
 			firstError = printNOK("", URL, firstError, "internalSitemap404")
 
@@ -632,6 +664,7 @@ try:
 			#	It seems they're all regex because I need to escape question marks even if I don't add the `r` prefix.
 			if not ( \
 						re.match('blob:https://kontent.ai', link) \
+					or  re.match('http://docs.oasis-open.org/xliff/xliff-core', link) \
 					or  re.match('https://assets-us-01.kc-usercontent.com', link) \
 					or  re.match('https://azure.microsoft.com/en-us', link) \
 					or  re.match('https://business.adobe.com/products/target', link) \
@@ -640,6 +673,7 @@ try:
 					or  re.match('https://help.zapier.com/hc/en-us/articles', link) \
 					or  re.match('https://player.vimeo.com/video/', link) \
 					or  re.match('https://twitter.com', link) \
+					or  re.match('https://www.cloudflare.com/learning', link) \
 					or  re.match('https://www.dta.gov.au/', link) \
 					or  re.match('https://www.mozilla.org/firefox', link) \
 					or  re.match('https://www.vic.gov.au/', link) \
