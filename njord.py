@@ -6,11 +6,11 @@ import requests
 import sys
 import time
 import traceback
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.firefox.options import Options as FirefoxOptions
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
+# from selenium import webdriver
+# from selenium.webdriver.common.by import By
+# from selenium.webdriver.firefox.options import Options as FirefoxOptions
+# from selenium.webdriver.support import expected_conditions as EC
+# from selenium.webdriver.support.ui import WebDriverWait
 
 # Prerequisites
 # install python3-venv
@@ -50,6 +50,7 @@ beVerbose = args.verbose
 
 # Domain and folder parameters cleanup:
 #    If domain doesn't start with HTTP(S) protocol, add it:
+# This URL fix is problematic, because if the sitemap contains HTTP instead of HTTPS, then it all fails if user doesn't provide `-d http://blabla`
 if not re.match(r'https?://', domain):
     domain = "https://" + domain
 
@@ -93,9 +94,9 @@ sessionForRequests.headers.update({'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64
 # Headless Firefox
 #     Initialize headless Firefox browser.
 #     The initialization and generally page processing can take VERY long time (couple of seconds for the init and then per request).
-opts = FirefoxOptions()
-opts.add_argument("--headless")
-browser = webdriver.Firefox(options=opts)
+# opts = FirefoxOptions()
+# opts.add_argument("--headless")
+# browser = webdriver.Firefox(options=opts)
 # Optional for possible future reference. The executable_path isn't mandatory if geckodriver is in ${PATH}.
 # browser = webdriver.Firefox(options=opts, executable_path='/usr/bin/geckodriver')
 
@@ -152,7 +153,7 @@ def printNOK(pg="", ln="", first=False, type=None, redir="", errorCode=""):
                   or type == 'absorel' \
                 ):
         if pagesLinksAndAnchors:
-            print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'] + color.END + " (" + pg + ")")
+            print("Issues in " + color.BOLD + pagesLinksAndAnchors[page]['title'].lstrip() + color.END + " (" + pg + ")")
         else:
             print("Some intial generic error occurred")
 
@@ -296,16 +297,11 @@ def printDebugTime(message, blockStartTime, scriptStartTime):
     print(message + " " + str(round(time.time() - blockStartTime)) + " sec. (" + str(round(time.time() - scriptStartTime)) + " since start)")
     return time.time()
 
-def finishAndQuit(errCode=0, browser=None):
+def finishAndQuit(errCode=0):
     # Finished, close temporary headless Firefox and print statistics.
     print("Finished...")
-    if browser:
-        print("... exiting the browser...")
-        browser.quit()
-        printStats()
-
+    printStats()
     print("... and closing.")
-
     sys.exit(errCode)
 
 if beVerbose:
@@ -345,7 +341,7 @@ try:
             sitemapFail = True
 
     if sitemapFail:
-        finishAndQuit(exitCode, browser)
+        finishAndQuit(exitCode)
 
     if beVerbose:
         debugTime = printDebugTime("Getting the sitemap took", debugTime, startTime)
@@ -362,13 +358,22 @@ try:
     for URL in URLs:
         retrieved += 1
 
+        if ("/midpoint/release/" or "/book/") in URL:
+            print("Skipped a release page.")
+            continue
+
         # Get the document source
         # Just a reminder: browser is an instance of headless Firefox. sessionForRequests is an instance of requests.
         try:
-            browser.get(URL)
+            # browser.get(URL)
+            pageReq = sessionForRequests.get(URL, timeout=10)
+            if pageReq.status_code < 400:
+                document = pageReq.text
+            else:
+                firstError = printNOK("", URL, firstError, "internalSitemap404")
             # time.sleep(1)
 
-            document = browser.page_source
+            # document = browser.page_source
         
         except:
             firstError = printNOK("", URL, firstError, "internalSitemap404")
@@ -390,13 +395,19 @@ try:
             normalLinks = re.findall(rf'<a [^>]*?href="([^"#]+?)"', document)
 
             # Prepend relative anchor links that lead to 1-N levels up with the current URL so that they don't appear to be in-page anchor links.
+            # Also delete FPT links, nothing t
             j = 0
             while j < len(normalLinks):
-                if re.match("../", normalLinks[j]):
-                    if not URL.endswith('/'):
-                        URL = URL + '/'
-                    normalLinks[j] = re.sub(rf'^../', URL + '../', normalLinks[j])
-                j += 1
+                if re.match(r'\b(?:ftp|mailto)', normalLinks[j]):
+                    del normalLinks[j]
+                elif ("/midpoint/release/" or "/book/" or "192.168.") in normalLinks[j]:
+                    del normalLinks[j]
+                else:
+                    if re.match("../", normalLinks[j]):
+                        if not URL.endswith('/'):
+                            URL = URL + '/'
+                        normalLinks[j] = re.sub(rf'^../', URL + '../', normalLinks[j])
+                    j += 1
 
             # Assign the normal links to the main DB of documents w/ links inside them now, as they don't need further cleaning (unlike anchors)
             pagesLinksAndAnchors[URL]['normal-links'] = normalLinks
@@ -404,6 +415,7 @@ try:
             # Cleaning up some anchor mess. Delete:
             #   The satisfactory level links found in /iam/iga/capabilities/summary/ are not anchor links
             #   All links to app.diagrams.net and viewer.diagrams.net because they're wicked and cause false positives (they contain anchor character but they don't lead to any anchor in the target document).
+            #   midPoint XML links (actions authorizations etc., e.g., /midpoint/reference/tasks/task-manager/#authorize-specific-operations)
             #   Postman app links -- the hash character doesn't mean it's an anchor
             #   Postman learn -- seems the document is JS generated so we can't effectively check anything. Also, Postman likes to ban us.
             #   Links longer than 2048 character. These are quite probably some weirdness like links to diagram.net that have the whole diagram encoded into the URL, apparently. The hash character there doesn't stand for an anchor anyway..
@@ -414,11 +426,16 @@ try:
                 if (\
                      re.match("https://app.diagrams.net", anchorLinks[i]) \
                      or re.match("https://app.getpostman.com/run-collection", anchorLinks[i]) \
+                     or re.match("http://midpoint.evolveum.com/xml/ns", anchorLinks[i]) \
                      or re.match("https://learning.postman.com/", anchorLinks[i]) \
                      or re.match("https://viewer.diagrams.net", anchorLinks[i]) \
+                     or re.match("https://github.com", anchorLinks[i]) \
                      or re.search("/misc/satisfaction-levels", anchorLinks[i]) \
+                     or re.search("$host", anchorLinks[i]) \
                      or len(anchorLinks[i]) > 2048 \
                     ):
+                    del anchorLinks[i]
+                elif ("/midpoint/release/" or "/book/" or "192.168.") in anchorLinks[i]:
                     del anchorLinks[i]
                 else:
                     # And while we're at it, if the link isn't deleted:
@@ -520,8 +537,13 @@ try:
                     # This branch means that the page is outside the scope of the search (combination of `--domain` and `--folder`) or that the sitemap is incomplete or that Njord has a bug
                     else:
                         try:
-                            browser.get(finalURL)
-                            outscopePage = browser.page_source
+                            pageReq = sessionForRequests.get(finalURL, timeout=10)
+                            if pageReq.status_code < 400:
+                                outscopePage = pageReq.text
+                            else:
+                                firstError = printNOK("", URL, firstError, "internalSitemap404")
+                            # browser.get(finalURL)
+                            # outscopePage = browser.page_source
                             if re.search(rf'\b(?:name|id)="{linkAnchor}"', outscopePage):
                                 okInternal += 1
                             else:
@@ -537,8 +559,13 @@ try:
                     # Try whether the page exists, if it does, test it. Otherwise, assume 404 or other error killed the try block. We don't care, it's simply unreachable.
                     try:
                         # Get the outside page
-                        browser.get(link)
-                        outsidePage = browser.page_source
+                        pageReq = sessionForRequests.get(link, timeout=10)
+                        if pageReq.status_code < 400:
+                            outsidePage = pageReq.text
+                        else:
+                            firstError = printNOK("", URL, firstError, "internalSitemap404")
+                        # browser.get(link)
+                        # outsidePage = browser.page_source
 
                         # Get base URL and anchor from the link
                         outsideLinkBaseURL = re.search(r'(.*?)#', link).group(1)
@@ -573,6 +600,9 @@ try:
             # If the link is relative, add the domain to it to make it absolute including the protocol.
             if re.match(r'^/', link):
                 link = domain + link
+            # If the link is apparently relative to the processed page, prepend it with the URL of the current page (i.e., `page`)
+            elif not re.match('http', link):
+                link = page + link
 
             # Remove some links from the testing:
             #    Fonts (local and those on cdnfonts, because CDNFonts returns 403 even if the URL is valid)
@@ -590,19 +620,21 @@ try:
                     or re.match('https://azure.microsoft.com/en-us', link) \
                     or re.match('https://business.adobe.com/products/target', link) \
                     or re.match('https://csrc.nist.gov/Projects/key-management/key-management-guidelines', link) \
-                    or re.match('https://github.com/Evolveum/docs/blob/', link) \
+                    or re.match('https://github.com', link) \
                     or re.match('https://graphiql-online.com/', link) \
                     or re.match('https://help.zapier.com/hc/en-us/articles', link) \
                     or re.match('https://player.vimeo.com/video/', link) \
                     or re.match('https://twitter.com', link) \
                     or re.match('https://www.cloudflare.com/learning', link) \
                     or re.match('https://www.dta.gov.au/', link) \
+                    or re.match('https://www.hhs.gov/hipaa/index.html', link) \
                     or re.match('https://www.mozilla.org/firefox', link) \
                     or re.match('https://www.vic.gov.au/', link) \
                     or re.match('mailto:', link) \
                     or re.match(r'https?://127.0.0.1', link) \
                     or re.match(r'https?://fonts.cdnfonts.com/css', link) \
                     or re.match(r'https?://localhost', link) \
+                    or re.search("$host", link) \
                     or re.search('%7B', link) \
                     or re.search('example.com', link) \
                     or re.search('example.org', link) \
@@ -671,7 +703,7 @@ try:
         pagesChecked += 1
 
     # Finished, close temporary headless Firefox and print statistics.
-    finishAndQuit(exitCode, browser)
+    finishAndQuit(exitCode)
     
 except Exception:
     print("Error occured or interuption code (^C) caught, terminating now.")
@@ -686,4 +718,4 @@ except Exception:
     if link:
         print("Last processed anchor or normal link:")
         print(link)
-    finishAndQuit(exitCode, browser)
+    finishAndQuit(exitCode)
